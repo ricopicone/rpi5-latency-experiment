@@ -345,9 +345,11 @@ spi: note: kernel rejected SPI_NO_CS; controller CE0 will toggle
   amplitude would start to attenuate; this experiment did not probe that
   region because the phase-shift criterion fails first.
 - **No clock-tick jitter beyond the loop's own ~6 µs p99 spread.** The
-  scope's measured phase had σ ≲ 0.5° at every frequency (10× tighter than
-  the variation between frequencies), so all the observed delay variation
-  comes from converter and measurement noise — not from the SBC.
+  scope traces were stable from acquisition to acquisition (the displayed
+  delay value drifted only ~0.5° during readout), so the 4.8 µs std-dev
+  across the frequency sweep is dominated by manual-readout uncertainty
+  and converter noise — not by any SBC-side variation that would show up
+  as a wandering trace.
 
 ---
 
