@@ -6,8 +6,8 @@ with the **Waveshare High-Precision AD/DA Board** (TI **ADS1256** ADC + TI
 ADS1256 and immediately reproduced on DAC8552 channel A; an oscilloscope
 comparing input against output shows the end-to-end latency as a phase shift.
 
-This is the Raspberry Pi version of the BeagleBone AI-64 experiment — same
-concept, same success criterion (phase shift ≤ 1/20 of the signal period).
+Success criterion used here: phase shift ≤ 1/20 of the signal period
+(≡ ≤ 18°) — a simple "input and output look in sync to the eye" test.
 
 ## What the code measures, and what it cannot
 
@@ -176,9 +176,9 @@ The Pi 5 + this code is **22%** of the budget; the ADS1256's SINC5 filter is
 this HAT — the ADC's filter alone is more than 16× over budget.
 
 **1/20-period success criterion:** met up to **≈238 Hz**. Above that, the
-analog-to-analog phase shift exceeds 18° and the original BeagleBone
-acceptance test fails. The README's pre-bring-up estimate of "0.5–1 kHz" was
-optimistic by a factor of 2–4.
+analog-to-analog phase shift exceeds 18° and the criterion fails. The
+README's pre-bring-up estimate of "0.5–1 kHz" was optimistic by a factor
+of 2–4.
 
 **The Raspberry Pi 5 is not the bottleneck.** Its CPU runs the loop at 15
 kSPS with the loop period locked to the 66.67 µs conversion interval (median

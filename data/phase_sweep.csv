@@ -10,8 +10,9 @@
 #   - C loop, SCHED_FIFO priority 80, pinned to core 3, mlockall
 # Stimulus / measurement:
 #   - Function generator: sine, 2 Vpp, +1.25 V DC offset (signal in 0.25..2.25 V)
-#   - Tektronix DPO2012B, DC coupling, 16x waveform averaging, statistics ON
-#   - Phase measured as CH1->CH2 rising-edge delay; mean over many acquisitions
+#   - Tektronix DPO2012B, AC coupling on both channels, 512x waveform averaging
+#   - Phase read manually from the scope's CH1->CH2 rising-edge delay
+#     measurement (statistics off); values fluctuated ~0.5 deg during readout
 #
 freq_hz,phase_deg
 100,8.0

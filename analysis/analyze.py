@@ -227,6 +227,221 @@ def plot_budget_bar(software_us: float, measured_total_us: float) -> Path:
     return _save(fig, "budget_bar.png")
 
 
+def plot_system_diagram() -> Path:
+    """
+    Block diagram of the signal path: function generator -> ADS1256 -> Pi 5 ->
+    DAC8552 -> scope, with the T-junction tapping the input straight into CH1.
+    """
+    fig, ax = plt.subplots(figsize=(12.0, 5.5))
+    ax.set_xlim(0, 16)
+    ax.set_ylim(0, 7)
+    ax.set_aspect("equal")
+    ax.axis("off")
+
+    def box(x, y, w, h, text, color="C0"):
+        ax.add_patch(plt.Rectangle((x, y), w, h, fill=True, facecolor="white",
+                                   edgecolor=color, linewidth=1.6))
+        ax.text(x + w / 2, y + h / 2, text, ha="center", va="center", fontsize=9)
+
+    def harrow(x0, x1, y, label=None, color="black", label_dy=0.32):
+        ax.annotate("", xy=(x1, y), xytext=(x0, y),
+                    arrowprops=dict(arrowstyle="-|>", color=color, lw=1.4,
+                                    shrinkA=2, shrinkB=2))
+        if label:
+            ax.text((x0 + x1) / 2, y + label_dy, label,
+                    ha="center", va="bottom", fontsize=8.5, color=color,
+                    style="italic")
+
+    # Row y-coordinates
+    y_main = 3.0          # main signal-path row
+    y_top = 5.5           # scope CH1 row
+    y_bot = 0.7           # scope CH2 row
+
+    # ---- main row, left to right ----
+    # Function generator (x: 0.3..3.2)
+    box(0.3, y_main - 0.8, 2.9, 1.6,
+        "Function generator\nsine, 2 Vpp,\n+1.25 V offset", color="C3")
+
+    # ADS1256 (x: 5.0..8.0)
+    box(5.0, y_main - 0.8, 3.0, 1.6,
+        "ADS1256\nAIN0 (single-ended)\n15 kSPS, SINC5", color="C0")
+
+    # Raspberry Pi 5 (x: 9.5..12.5)
+    box(9.5, y_main - 0.8, 3.0, 1.6,
+        "Raspberry Pi 5\nuser-space C loop\nSCHED_FIFO, core 3", color="C1")
+
+    # DAC8552 (x: 14.0..15.7)
+    box(14.0, y_main - 0.8, 1.7, 1.6, "DAC8552\nOUTA", color="C0")
+
+    # T-junction marker on funcgen output
+    tx = 3.7
+    ax.plot([3.2, tx], [y_main, y_main], "k-", lw=1.2)
+    ax.plot([tx], [y_main], "ko", markersize=5, zorder=5)
+    ax.text(tx + 0.05, y_main - 0.32, "T", fontsize=8, color="dimgray",
+            style="italic")
+
+    # T -> ADS1256
+    harrow(tx, 5.0, y_main, "AD0 (signal)\nAINCOM (gnd)", label_dy=0.30)
+
+    # ADS1256 -> Pi 5
+    harrow(8.0, 9.5, y_main, "SPI @ 1.92 MHz\n+ DRDY (GPIO17)", label_dy=0.30)
+
+    # Pi 5 -> DAC8552
+    harrow(12.5, 14.0, y_main, "SPI @ 15.6 MHz", label_dy=0.30)
+
+    # ---- scope CH1 row (top) ----
+    box(13.6, y_top - 0.45, 2.1, 0.9, "Scope CH1\n(input)", color="C2")
+    # T-junction up to CH1
+    ax.plot([tx, tx], [y_main, y_top], "k-", lw=1.2)
+    harrow(tx, 13.6, y_top, "CH1 (input reference, via BNC T)", color="dimgray",
+           label_dy=0.18)
+
+    # ---- scope CH2 row (bottom) ----
+    box(13.6, y_bot - 0.45, 2.1, 0.9, "Scope CH2\n(output)", color="C2")
+    # DAC8552 down to CH2
+    ax.plot([14.85, 14.85], [y_main - 0.8, y_bot + 0.45], "k-", lw=1.2)
+    # arrow head at the scope side
+    ax.annotate("", xy=(14.85, y_bot + 0.45), xytext=(14.85, y_bot + 0.55),
+                arrowprops=dict(arrowstyle="-|>", color="black", lw=1.4))
+
+    # ---- side bracket showing the measured quantity ----
+    bx = 15.85
+    ax.plot([bx, bx + 0.15], [y_top, y_top], "k-", lw=1.0)
+    ax.plot([bx + 0.15, bx + 0.15], [y_top, y_bot], "k-", lw=1.0)
+    ax.plot([bx + 0.15, bx], [y_bot, y_bot], "k-", lw=1.0)
+    ax.text(bx + 0.35, (y_top + y_bot) / 2,
+            "scope measures\nCH1 → CH2 phase shift\n= analog-to-analog\n  latency",
+            ha="left", va="center", fontsize=8, style="italic", color="dimgray")
+
+    ax.set_title("Signal-path block diagram", fontsize=11)
+    return _save(fig, "system_diagram.png")
+
+
+def plot_latency_timing(adc_ns: np.ndarray, dac_ns: np.ndarray,
+                        proc_ns: np.ndarray) -> Path:
+    """
+    Gantt-style breakdown of one loop iteration: top row is the full
+    DRDY -> DAC-write window (~48 us median), middle row splits it into the
+    measured ADC-read and DAC-write phases, bottom row decomposes each phase
+    into GPIO ioctls + spidev syscall + SPI bit-clocking on the wire.
+
+    The middle row's segment widths are the measured medians from the CSV;
+    the bottom row's sub-segments are estimates that match the medians and
+    are consistent with each component's known cost (per-CS GPIO ioctl ~5 us,
+    spidev syscall ~2-3 us, SPI on-wire = (3*8/clock)*1e6 us).
+    """
+    adc_med = float(np.median(adc_ns)) * 1e-3
+    dac_med = float(np.median(dac_ns)) * 1e-3
+    proc_med = float(np.median(proc_ns)) * 1e-3
+
+    # Sub-decomposition (estimates).
+    spi_adc_wire = 3 * 8 / 1.92e6 * 1e6              # 12.5 us
+    spi_dac_wire = 3 * 8 / 15.6e6 * 1e6              # 1.54 us
+    gpio_each = 5.0                                  # ~5 us per ioctl
+    spidev_adc = adc_med - 2 * gpio_each - spi_adc_wire
+    spidev_dac = dac_med - 2 * gpio_each - spi_dac_wire
+
+    fig, ax = plt.subplots(figsize=(11.0, 4.5))
+    row_h = 0.6
+    y_top = 3.0
+    y_mid = 1.9
+    y_bot = 0.8
+
+    # Top row: total processing latency
+    ax.barh(y_top, proc_med, height=row_h, color="C7", edgecolor="black",
+            linewidth=0.8)
+    ax.text(proc_med / 2, y_top, f"processing latency  {proc_med:.1f} µs",
+            ha="center", va="center", color="white", fontsize=10,
+            fontweight="bold")
+
+    # Middle row: ADC read phase, DAC write phase
+    ax.barh(y_mid, adc_med, left=0, height=row_h, color="C0",
+            edgecolor="black", linewidth=0.8, label="ADC read phase")
+    ax.text(adc_med / 2, y_mid, f"ADC read phase\n{adc_med:.1f} µs",
+            ha="center", va="center", color="white", fontsize=9,
+            fontweight="bold")
+    ax.barh(y_mid, dac_med, left=adc_med, height=row_h, color="C1",
+            edgecolor="black", linewidth=0.8, label="DAC write phase")
+    ax.text(adc_med + dac_med / 2, y_mid, f"DAC write phase\n{dac_med:.1f} µs",
+            ha="center", va="center", color="white", fontsize=9,
+            fontweight="bold")
+
+    # Bottom row: sub-decomposition
+    def seg(left, width, color, text):
+        ax.barh(y_bot, width, left=left, height=row_h, color=color,
+                edgecolor="black", linewidth=0.6)
+        if width >= 3.0:
+            ax.text(left + width / 2, y_bot, text,
+                    ha="center", va="center", fontsize=7.5, color="black")
+
+    adc_segs = [
+        (gpio_each,   "C4", "GPIO\nCS↓"),
+        (spidev_adc,  "C9", "spidev\nsyscall"),
+        (spi_adc_wire,"C0", f"SPI on wire\n{spi_adc_wire:.1f} µs"),
+        (gpio_each,   "C4", "GPIO\nCS↑"),
+    ]
+    x = 0.0
+    for w, c, t in adc_segs:
+        seg(x, w, c, t)
+        x += w
+
+    dac_segs = [
+        (gpio_each,   "C4", "GPIO\nCS↓"),
+        (spidev_dac,  "C9", "spidev\nsyscall"),
+        (spi_dac_wire,"C1", f"{spi_dac_wire:.1f} µs"),
+        (gpio_each,   "C4", "GPIO\nCS↑"),
+    ]
+    x = adc_med
+    for w, c, t in dac_segs:
+        seg(x, w, c, t)
+        x += w
+
+    # Annotations linking rows
+    ax.annotate("", xy=(0, y_mid + row_h / 2 + 0.05),
+                xytext=(0, y_top - row_h / 2 - 0.05),
+                arrowprops=dict(arrowstyle="-", color="dimgray", lw=0.8))
+    ax.annotate("", xy=(proc_med, y_mid + row_h / 2 + 0.05),
+                xytext=(proc_med, y_top - row_h / 2 - 0.05),
+                arrowprops=dict(arrowstyle="-", color="dimgray", lw=0.8))
+    ax.annotate("", xy=(0, y_bot + row_h / 2 + 0.05),
+                xytext=(0, y_mid - row_h / 2 - 0.05),
+                arrowprops=dict(arrowstyle="-", color="dimgray", lw=0.8))
+    ax.annotate("", xy=(adc_med, y_bot + row_h / 2 + 0.05),
+                xytext=(adc_med, y_mid - row_h / 2 - 0.05),
+                arrowprops=dict(arrowstyle="-", color="dimgray", lw=0.8))
+    ax.annotate("", xy=(proc_med, y_bot + row_h / 2 + 0.05),
+                xytext=(proc_med, y_mid - row_h / 2 - 0.05),
+                arrowprops=dict(arrowstyle="-", color="dimgray", lw=0.8))
+
+    # Side labels for rows
+    ax.text(-0.5, y_top, "total", ha="right", va="center", fontsize=9)
+    ax.text(-0.5, y_mid, "phase", ha="right", va="center", fontsize=9)
+    ax.text(-0.5, y_bot, "component", ha="right", va="center", fontsize=9)
+
+    # Legend
+    from matplotlib.patches import Patch
+    handles = [
+        Patch(color="C4", label="GPIO uAPI v2 ioctl (CS toggle, ~5 µs each)"),
+        Patch(color="C9", label="spidev SPI_IOC_MESSAGE syscall overhead"),
+        Patch(color="C0", label="SPI bytes on wire @ 1.92 MHz (ADC, 12.5 µs)"),
+        Patch(color="C1", label="SPI bytes on wire @ 15.6 MHz (DAC, 1.5 µs)"),
+    ]
+    ax.legend(handles=handles, loc="lower center", bbox_to_anchor=(0.5, -0.25),
+              ncol=2, frameon=False, fontsize=8)
+
+    ax.set_xlim(-2.5, proc_med + 2.5)
+    ax.set_ylim(0.2, 3.7)
+    ax.set_xlabel("Time within one iteration (µs)")
+    ax.set_yticks([])
+    ax.set_title("Where the 48 µs of software loop time is spent "
+                 "(median of 50 000 iterations)", fontsize=11)
+    ax.grid(True, axis="x", alpha=0.3)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_visible(False)
+    return _save(fig, "latency_timing.png")
+
+
 def plot_summary(
     freqs: np.ndarray,
     phases: np.ndarray,
@@ -306,7 +521,7 @@ def plot_summary(
     ax.set_ylabel("Latency (µs)")
     ax.set_title("(d) Latency budget")
     ax.grid(True, axis="y", alpha=0.3)
-    ax.legend(loc="upper left", fontsize=8, framealpha=0.95)
+    ax.legend(loc="lower right", fontsize=8, framealpha=0.95)
 
     fig.suptitle("Analog-to-analog latency, Raspberry Pi 5 + Waveshare HP AD/DA "
                  "(ADS1256 @ 15 kSPS)", fontsize=12)
@@ -371,11 +586,15 @@ def main() -> int:
 
     # -- Plots ---------------------------------------------------------------
     out = []
+    out.append(plot_system_diagram())
     out.append(plot_phase_vs_freq(freqs, phases))
     out.append(plot_delay_vs_freq(freqs, phases))
     out.append(plot_proc_latency_hist(cdata["proc_ns"]))
     out.append(plot_loop_period_hist(cdata["loop_ns"]))
     out.append(plot_budget_bar(proc["median"], delay_mean_us))
+    out.append(plot_latency_timing(cdata["adc_read_ns"],
+                                   cdata["dac_write_ns"],
+                                   cdata["proc_ns"]))
     out.append(plot_summary(freqs, phases, delays_us,
                             cdata["proc_ns"], cdata["loop_ns"],
                             proc["median"], delay_mean_us))

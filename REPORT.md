@@ -24,8 +24,8 @@ noise (panel b).
 The Raspberry Pi 5 + user-space C loop (the part of the system that lives in
 software) contributes **48.0 µs** of the budget — about **22%** — leaving the
 **ADS1256's SINC5 decimation filter** as the dominant contributor at about
-**78%**. The 1/20-period success criterion from the original BeagleBone
-experiment is met only up to **≈ 238 Hz** on this hardware.
+**78%**. A "phase shift ≤ 1/20 of the signal period" criterion is met only up
+to **≈ 238 Hz** on this hardware.
 
 The headline figure is reproduced below:
 
@@ -34,6 +34,10 @@ The headline figure is reproduced below:
 The same result on the scope at 500 Hz:
 
 ![Scope at 500 Hz: CH1 input (yellow, 500 mV/div), CH2 DAC output (cyan, 200 mV/div), 500 µs/div. Visible stair-stepping on CH2 is the 15 kSPS reconstruction (≈ 30 samples per period); the phase shift between zero crossings is the latency.](photos/E579E372-4E5D-4261-98BA-027DA3A7E445_1_102_o.jpeg)
+
+Block diagram of the signal path:
+
+![Signal-path block diagram: function generator -> T -> (CH1, ADS1256). ADS1256 -> Pi 5 C loop via SPI + DRDY. Pi 5 -> DAC8552 via SPI. DAC8552 OUTA -> CH2. The scope measures the CH1 -> CH2 phase shift, which is the end-to-end analog-to-analog latency.](analysis/figures/system_diagram.png)
 
 ---
 
@@ -47,7 +51,7 @@ The same result on the scope at 500 Hz:
 | OS / kernel | Debian 13 (trixie) / `6.12.47+rpt-rpi-2712`, stock — no `PREEMPT_RT`, no `isolcpus` |
 | ADC + DAC | Waveshare *High-Precision AD/DA Board* — TI ADS1256 (24-bit ΣΔ) + TI DAC8552 (16-bit) |
 | Function generator | Sine, 2 Vpp, +1.25 V DC offset (signal swing 0.25 V → 2.25 V, within the ADS1256's `AIN0 ∈ [0, AVDD]` range) |
-| Oscilloscope | Tektronix DPO2012B; DC coupling; 16× waveform averaging; statistics on |
+| Oscilloscope | Tektronix DPO2012B; AC coupling on both channels; 512× waveform averaging; manual cursor / measurement readout (statistics off) |
 
 **Software**
 
@@ -97,7 +101,10 @@ Function generator setup (Tektronix AFG1002): sine, 500 Hz, 2.000 Vpp,
 
 ### 3.1 Software timing (`characterize` mode)
 
-The C program (`latency_loop.c`) records four timestamps per iteration:
+The ADS1256 signals a freshly-converted sample by asserting its `DRDY` pin
+(Data Ready) low. The C loop polls that GPIO and only reads the sample after
+`DRDY` goes low, so every iteration is paced by the converter, not by the
+CPU. The four timestamps recorded per iteration are:
 
 ```
 ta : just before waiting for DRDY
@@ -126,15 +133,21 @@ phase shift on the scope (CH1 vs CH2) is the **true analog-to-analog
 latency** — including the ADS1256's SINC5 filter group delay and the DAC8552
 settling time, neither of which the software can see.
 
-The scope's built-in "CH1→CH2 rising-edge delay" measurement, with 16× waveform
-averaging and statistics enabled, was used to read off the phase at each
-frequency. Each reading was the *mean* over many acquisitions, not a single
-shot — the standard deviation reported by the scope was ≲ 0.5° in every case.
+Each phase reading was taken manually from the DPO2012B's built-in
+"CH1→CH2 rising-edge delay" measurement, with 512× waveform averaging
+enabled on both channels to smooth out random noise before the scope
+computes the edge times. Scope statistics were left off; the displayed
+delay value fluctuated by roughly half a degree during readout, and the
+reported value is the eyeballed centre of that fluctuation.
+
+Both channels used AC coupling. Because both channels see the same input
+high-pass response, the contribution to phase is common-mode and cancels
+in the channel-to-channel delta that defines the latency reading.
 
 The level shift between input and output (CH1 swing 0.25–2.25 V, CH2 swing
 ~1.4–2.4 V) is the expected consequence of `Vref_ADC ≠ Vref_DAC` and the
-mid-scale offset coded into the ADC→DAC value mapping. It does not affect the
-phase measurement (the scope picks zero crossings from each channel
+mid-scale offset coded into the ADC→DAC value mapping. It does not affect
+the phase measurement (the scope picks zero crossings from each channel
 independently), so it does not affect the latency result.
 
 The function-generator frequency was swept manually in 100 Hz steps from
@@ -208,8 +221,10 @@ single dominant contributor at ~78% of the budget.
 
 ### 4.4 Success-criterion frequency
 
-The original BeagleBone acceptance test was *phase shift ≤ 1/20 of the
-signal period* (≡ ≤ 18°). With a constant 212.3 µs delay:
+A simple "phase shift ≤ 1/20 of the signal period" (≡ ≤ 18°) is a useful
+yardstick — at one twentieth of a period, the input and the output traces
+on the scope are clearly in sync to the eye, and the system is "fast
+enough" relative to the signal. With a constant 212.3 µs delay:
 
 > The system meets the criterion up to **≈ 238 Hz**.
 
@@ -258,7 +273,37 @@ filter is the dominant term.
 
 ### 5.3 Where the software 48 µs goes
 
-A back-of-the-envelope breakdown of the 47.96 µs processing latency:
+The C loop's measured 47.96 µs comes out of three distinct cost categories,
+in roughly increasing fraction:
+
+1. **SPI bytes on the wire (irreducible, ≈ 14 µs).** The ADS1256's SPI
+   clock is capped at `f_CLKIN / 4 ≈ 1.92 MHz`, so its 3-byte sample takes
+   `(3 × 8) / 1.92 MHz ≈ 12.5 µs` to clock in. The DAC8552 runs at 15.6 MHz,
+   so its 3-byte write is on the wire in only `≈ 1.5 µs`. Both numbers are
+   set by the SPI bus and the chip clocks — there is nothing the CPU can
+   do to make them shorter.
+
+2. **`spidev` syscall overhead (≈ 10–15 µs).** Each call to
+   `ioctl(fd, SPI_IOC_MESSAGE(1), …)` crosses the user/kernel boundary,
+   parses an `spi_ioc_transfer` struct, programs the controller, and
+   returns. With two SPI transfers per iteration (one read, one write),
+   this adds up to roughly 10–15 µs.
+
+3. **GPIO uAPI v2 ioctls for chip select (≈ 20 µs).** Each iteration
+   toggles two chip-select lines twice each (ADC CS↓, ADC CS↑, DAC CS↓,
+   DAC CS↑). Every toggle is an `ioctl(fd, GPIO_V2_LINE_SET_VALUES_IOCTL,
+   …)` — about 5 µs per call on the RP1 — so four toggles cost roughly
+   20 µs. These are also the dominant *avoidable* cost.
+
+The diagram below lays this out chronologically: the top row is the total
+47.96 µs window, the middle row splits it into the two measured phases
+(`ADC read phase` and `DAC write phase`, taken straight from the per-sample
+CSV), and the bottom row decomposes each phase into the GPIO ioctls, the
+spidev syscall, and the SPI bytes on the wire. The widths of the
+sub-segments are estimates consistent with the per-component costs above
+and with the measured phase totals.
+
+![Per-iteration timing breakdown — top row is the total processing latency, middle row is the two measured phases, bottom row decomposes each phase into GPIO ioctls, spidev syscall, and SPI bytes on the wire.](analysis/figures/latency_timing.png)
 
 | Item | µs | Note |
 |---|---:|---|
@@ -271,8 +316,8 @@ A back-of-the-envelope breakdown of the 47.96 µs processing latency:
 
 The dominant *avoidable* software cost is the GPIO ioctl path. An `mmap`'d
 direct-register approach would cut each CS toggle to a few hundred
-nanoseconds, saving ~15–20 µs total — but again, only on the software
-component, and the filter would still set the floor.
+nanoseconds, saving ~15–20 µs total — but only on the software component,
+and the SINC5 filter would still set the analog-to-analog latency floor.
 
 ### 5.4 A subtlety found during bring-up
 

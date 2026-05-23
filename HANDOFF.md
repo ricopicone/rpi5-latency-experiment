@@ -11,9 +11,9 @@ with the **Waveshare High-Precision AD/DA Board** (TI **ADS1256** 24-bit ADC +
 the ADS1256 and immediately re-emitted on DAC8552 channel A; an oscilloscope
 reads the end-to-end latency as input-vs-output phase shift.
 
-This feeds a larger goal: evaluating the Pi 5 as the single-board computer for
-the next edition of a real-time computing textbook (it succeeds a BeagleBone
-AI-64). See `README.md` for the full experiment description and wiring.
+This feeds a larger goal: evaluating the Pi 5 as the single-board computer
+for the next edition of a real-time computing textbook. See `README.md` for
+the full experiment description and wiring.
 
 ## Current status
 
