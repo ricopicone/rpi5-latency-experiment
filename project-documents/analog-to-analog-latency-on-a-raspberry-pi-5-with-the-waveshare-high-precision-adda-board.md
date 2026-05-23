@@ -13,32 +13,44 @@ title: Analog-to-Analog Latency on a Raspberry Pi 5 with the Waveshare High-Prec
 
 ## 1. Summary
 
-A closed-loop analog passthrough — function-generator sine → ADS1256 → user-space
-C loop → DAC8552 — was characterized on a Raspberry Pi 5 (Debian 13 trixie,
-kernel `6.12.47+rpt-rpi-2712`) carrying the Waveshare High-Precision AD/DA
-Board. The end-to-end analog-to-analog latency measured on a Tektronix DPO2012B
-oscilloscope is
+This experiment evaluates the Raspberry Pi 5 as a low-latency analog-I/O
+host for the real-time computing textbook. The measurement is the end-to-end
+delay from an analog input on an ADC to the corresponding analog output on
+a DAC — the latency budget a control loop has to live within.
+
+A closed-loop analog passthrough — function-generator sine → ADS1256 (24-bit
+sigma-delta ADC) → user-space C loop on the Pi 5 → DAC8552 (16-bit DAC) —
+was characterized on a Raspberry Pi 5 (Debian 13 trixie, kernel
+`6.12.47+rpt-rpi-2712`) carrying the Waveshare High-Precision AD/DA Board,
+a Hardware-Attached-on-Top (HAT) module that mounts on the Pi's 40-pin
+header. The end-to-end analog-to-analog latency measured on a Tektronix
+DPO2012B oscilloscope is
 
 > **212.3 µs ± 4.8 µs** (mean ± s.d., n = 10 frequencies between 100 Hz and 1 kHz)
 
-The system behaves as a pure transport delay: phase shift scales linearly with
-frequency over the measured range (Fig. 1, panel a), and the per-frequency
-delay computed from each phase reading is constant within the measurement
-noise (panel b).
+The system behaves as a pure transport delay: phase shift scales linearly
+with frequency over the measured range (Fig. 1, panel a), and the
+per-frequency delay computed from each phase reading is constant within
+the measurement noise (panel b).
 
-The Raspberry Pi 5 + user-space C loop (the part of the system that lives in
-software) contributes **48.0 µs** of the budget — about **22%** — and the
-**ADS1256's SINC5 decimation filter** is the dominant contributor at about
-**78%**. The 22% software number deserves a footnote (see §5.5): of those
-48 µs, only ~14 µs is SPI bit-clocking on the wire — the other ~34 µs is the
-kernel-mediated `spidev` and GPIO uAPI v2 interfaces the loop uses. A
-direct-register-access loop using `mmap` of the RP1's GPIO and SPI peripheral
-registers would cut that to ~15 µs at the cost of giving up the portable
-Linux interface. The analog floor (the ADS1256 SINC5 filter) is unaffected
-by any software change.
+The Raspberry Pi 5 + user-space C loop (the part of the system that lives
+in software) contributes **48.0 µs** of the budget — about **22%** — and
+the **ADS1256's SINC5 decimation filter** (a fifth-order sinc filter
+inside the ADC, see §4.3) is the dominant contributor at about **78%**.
+
+The 22% software figure is worth a footnote, because it is *not* set by Pi
+5 silicon. Of those 48 µs, only ~14 µs is irreducible SPI bit-clocking on
+the wire; the other ~34 µs is the cost of the kernel-mediated `spidev` and
+GPIO uAPI v2 interfaces the loop uses to talk to the SPI controller and the
+chip-select pins. A direct-register-access loop — using `mmap` of the Pi
+5's RP1 I/O controller's GPIO and SPI peripheral registers — would cut
+that 48 µs to ~15 µs, at the cost of code that's specific to the RP1 chip
+rather than portable across single-board computers (SBCs). See §5.5 for
+the full set of trade-offs.
 
 A "phase shift ≤ 1/20 of the signal period" criterion is met only up to
-**≈ 238 Hz** on this hardware.
+**≈ 238 Hz** on this hardware. (See §4.4 for what this criterion is and
+why it is a useful yardstick for control-loop work.)
 
 The headline figure is reproduced below:
 
@@ -74,8 +86,8 @@ Block diagram of the signal path:
 | GPIO | Linux GPIO character-device uAPI v2 (the legacy `bcm2835` / `wiringPi` libraries are incompatible with the RP1 controller) |
 | SPI | `spidev`, per-transfer clock rate. ADS1256 clocked at 1.92 MHz (`f_CLKIN/4`, the part's hard ceiling); DAC8552 at 15.6 MHz |
 | ADC mode | RDATAC (continuous-read) on a single channel — minimum per-sample overhead |
-| Sample rate | 15 kSPS (`ADS1256_DRATE = 0xE0`) — see §6 for why not 30 kSPS |
-| Chip select | Manual GPIO toggle (Waveshare routes both chips' CS to plain GPIO, not the SPI controller's CE lines) |
+| Sample rate | 15 kSPS (`ADS1256_DRATE = 0xE0`) — see §5.2 for why not 30 kSPS |
+| Chip select (CS) | Manual GPIO toggle. On a shared SPI bus each peripheral has its own CS line that the master drives low to address it. The Waveshare HAT wires both chips' CS pins to plain GPIO lines (GPIO22 for the ADC, GPIO23 for the DAC) rather than the SPI controller's built-in CE0/CE1 outputs, so the C loop toggles them itself rather than letting the controller do it. |
 
 **Wiring**
 
@@ -143,8 +155,11 @@ are independent of the analog signal; see §3.2).
 `latency_loop --mode passthrough` mirrors the ADC sample to the DAC output
 continuously. With the function-generator sine on `AIN0`, the input-vs-output
 phase shift on the scope (CH1 vs CH2) is the **true analog-to-analog
-latency** — including the ADS1256's SINC5 filter group delay and the DAC8552
-settling time, neither of which the software can see.
+latency** — including the ADS1256's SINC5 filter *group delay* (the
+time delay every frequency component picks up traversing the converter's
+internal decimation filter; see §4.3) and the DAC8552's *settling time* (how
+long the DAC output amplifier takes to swing to a new code's voltage),
+neither of which the software loop can see.
 
 Each phase reading was taken manually from the DPO2012B's built-in
 "CH1→CH2 rising-edge delay" measurement, with 512× waveform averaging
@@ -189,8 +204,12 @@ Phase measurements and the corresponding time delays per frequency:
 
 **Mean delay = 212.3 µs, σ = 4.8 µs.** A linear fit of phase vs frequency
 (forced through the origin) gives τ = 210.2 µs — within ~1% of the simple
-mean. (The 100 Hz outlier, 222 µs, is the expected effect of measuring an
-8° angle: phase-measurement uncertainty scales as 1/sin(φ).)
+mean. (The 100 Hz outlier, 222 µs, reflects the basic fact that converting
+a *phase* reading back to a *delay* multiplies by the period: at 100 Hz the
+period is 10 000 µs, so a ±0.5° readout uncertainty maps to ±14 µs of
+delay uncertainty, while at 1 kHz the same ±0.5° maps to ±1.4 µs. The
+high-frequency points are therefore individually more precise estimates of
+the same underlying delay.)
 
 ![Phase vs freq](https://raw.githubusercontent.com/ricopicone/rpi5-latency-experiment/main/analysis/figures/phase_vs_freq.png)
 ![Delay vs freq](https://raw.githubusercontent.com/ricopicone/rpi5-latency-experiment/main/analysis/figures/delay_vs_freq.png)
@@ -221,7 +240,7 @@ further if needed.
 | Component | Latency (µs) | Reasoning |
 |---|---:|---|
 | Software loop (DRDY → DAC chip written) | 48.0 | measured, this code, median |
-| ADS1256 SINC5 group delay @ 15 kSPS | ~166.7 | ≈ 2.5 / f_data, datasheet-consistent |
+| ADS1256 SINC5 group delay @ 15 kSPS | ~166.7 | ≈ (5/2) / f_data — see derivation below |
 | DAC8552 settling | ~5.0 | datasheet typical |
 | **Predicted total** | **~219.7** | sum of the above |
 | **Measured total (scope)** | **212.3** | mean of §4.1 sweep |
@@ -230,16 +249,35 @@ Predicted and measured agree within **3.4%** (7.4 µs, comfortably inside the
 4.8 µs measurement standard deviation). The ADS1256 SINC5 filter is the
 single dominant contributor at ~78% of the budget.
 
+*Where the 166.7 µs comes from.* The ADS1256 averages many modulator
+samples through a 5-tap sinc-shaped decimation filter to produce each
+output sample, and the group delay of a linear-phase SINC^N filter with
+decimation ratio *D* clocked at modulator rate *f_mod* is
+(*N* · *D*) / (2 · *f_mod*). For the ADS1256 the modulator clocks at
+*f_mod* = *f_CLKIN* / 4 = 7.68 MHz / 4 = 1.92 MHz, and at 15 kSPS the
+decimation ratio is *D* = *f_mod* / *f_data* = 1.92 MHz / 15 kHz = 128, so
+the group delay is (5 · 128) / (2 · 1.92 × 10⁶) ≈ **166.7 µs**. Halving
+the data rate to 7.5 kSPS doubles this. Doubling the data rate to 30 kSPS
+halves it to ~83 µs — but, per §5.2, the loop can no longer keep up at
+that rate.
+
 ![Budget](https://raw.githubusercontent.com/ricopicone/rpi5-latency-experiment/main/analysis/figures/budget_bar.png)
 
 ### 4.4 Success-criterion frequency
 
-A simple "phase shift ≤ 1/20 of the signal period" (≡ ≤ 18°) is a useful
-yardstick — at one twentieth of a period, the input and the output traces
-on the scope are clearly in sync to the eye, and the system is "fast
-enough" relative to the signal. With a constant 212.3 µs delay:
+For a closed-loop controller, "the input-to-output transport delay is
+negligible at the signal frequencies of interest" is a useful pass/fail
+condition. A common operational form of that condition is
 
-> The system meets the criterion up to **≈ 238 Hz**.
+> phase shift ≤ 1/20 of the signal period (≡ ≤ 18°)
+
+— at one twentieth of a period the input and the output traces look in
+sync to the eye on the scope and the closed-loop dynamics are not
+dominated by the I/O delay. With our measured constant delay τ = 210.2 µs
+(the linear fit through the origin from §4.1, which is the most precise
+estimate of the underlying delay) the system meets that criterion up to
+
+> **≈ 238 Hz** (computed as (1/20) / τ = 1 / (20 · 210.2 µs)).
 
 This is well below the README's pre-bring-up estimate of "0.5–1 kHz with
 this HAT," which was optimistic by a factor of 2–4.
@@ -270,8 +308,9 @@ The honest way to read the 48 µs software number is in three layers:
 So *which* of these you consider "the bottleneck" depends on the question.
 
 - *For analog-to-analog latency on this hardware:* the ADS1256 filter is
-  far and away the dominant contributor. Even a perfect software loop
-  would get the end-to-end number down only from 212 µs to ~180 µs.
+  far and away the dominant contributor. Even cutting the software loop
+  to its irreducible 14 µs SPI bit-clocking floor would reduce the
+  end-to-end number only from 212 µs to ~186 µs (see row B in §5.5).
 - *For software-side latency on the Pi 5:* the Linux user-space interfaces
   are dominant. Bypassing them via direct register access on the RP1 would
   reduce the software loop from 48 µs to roughly 15 µs.
@@ -372,8 +411,15 @@ spi: note: kernel rejected SPI_NO_CS; controller CE0 will toggle
 ### 5.5 What would it take to hit ~10 µs end-to-end?
 
 The original aspirational target for an analog-to-analog control loop on
-this kind of platform is **~10 µs** (1/20 of a 5 kHz period). To frame what
-it would take, here are the four configurations of interest:
+this kind of platform is **~10 µs** (1/20 of a 5 kHz period, i.e. the
+acceptance criterion in §4.4 evaluated at 5 kHz). The choice of ADC matters
+here: the ADS1256 we used is a sigma-delta converter with an internal
+decimation filter, which intrinsically adds tens to hundreds of microseconds
+of group delay. A *successive-approximation* (SAR) ADC has no such filter —
+it samples the input once via a track-and-hold and then converges to a
+digital code in a few microseconds at most. For "fast" SBC-class analog
+I/O loops, SAR is the usual choice. To frame what it would take, here are
+the four configurations of interest:
 
 | Configuration | Software loop | Analog floor | End-to-end |
 |---|---:|---:|---:|
