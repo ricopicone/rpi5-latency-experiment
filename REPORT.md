@@ -24,7 +24,7 @@ noise (panel b).
 The Raspberry Pi 5 + user-space C loop (the part of the system that lives in
 software) contributes **48.0 µs** of the budget — about **22%** — and the
 **ADS1256's SINC5 decimation filter** is the dominant contributor at about
-**78%**. The 22% software number deserves a footnote (see §5.6): of those
+**78%**. The 22% software number deserves a footnote (see §5.5): of those
 48 µs, only ~14 µs is SPI bit-clocking on the wire — the other ~34 µs is the
 kernel-mediated `spidev` and GPIO uAPI v2 interfaces the loop uses. A
 direct-register-access loop using `mmap` of the RP1's GPIO and SPI peripheral
