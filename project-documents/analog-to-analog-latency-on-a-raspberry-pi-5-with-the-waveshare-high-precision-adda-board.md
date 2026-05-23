@@ -27,10 +27,18 @@ delay computed from each phase reading is constant within the measurement
 noise (panel b).
 
 The Raspberry Pi 5 + user-space C loop (the part of the system that lives in
-software) contributes **48.0 µs** of the budget — about **22%** — leaving the
-**ADS1256's SINC5 decimation filter** as the dominant contributor at about
-**78%**. A "phase shift ≤ 1/20 of the signal period" criterion is met only up
-to **≈ 238 Hz** on this hardware.
+software) contributes **48.0 µs** of the budget — about **22%** — and the
+**ADS1256's SINC5 decimation filter** is the dominant contributor at about
+**78%**. The 22% software number deserves a footnote (see §5.5): of those
+48 µs, only ~14 µs is SPI bit-clocking on the wire — the other ~34 µs is the
+kernel-mediated `spidev` and GPIO uAPI v2 interfaces the loop uses. A
+direct-register-access loop using `mmap` of the RP1's GPIO and SPI peripheral
+registers would cut that to ~15 µs at the cost of giving up the portable
+Linux interface. The analog floor (the ADS1256 SINC5 filter) is unaffected
+by any software change.
+
+A "phase shift ≤ 1/20 of the signal period" criterion is met only up to
+**≈ 238 Hz** on this hardware.
 
 The headline figure is reproduced below:
 
@@ -240,21 +248,41 @@ this HAT," which was optimistic by a factor of 2–4.
 
 ## 5. Discussion
 
-### 5.1 The Pi 5 is not the bottleneck
+### 5.1 The Pi 5 silicon is not the bottleneck — the chosen Linux interfaces are
 
-This is the single most useful finding to carry forward into the textbook.
-The Pi 5 CPU runs the user-space C loop with about **19 µs of margin per
-iteration** at 15 kSPS (66.67 µs interval − 47.96 µs median proc latency =
-18.71 µs of slack). The SPI controller on the RP1 can clock far faster than
-the 1.92 MHz the ADS1256 will accept; the DAC side of the loop, which runs
-at 15.6 MHz, demonstrates this (the 3-byte DAC frame is on the wire in
-1.5 µs, dwarfed by the per-transfer syscall overhead).
+The honest way to read the 48 µs software number is in three layers:
 
-The fact that **78%** of the analog-to-analog latency comes from the ADS1256
-itself is a clean experimental demonstration of an important real-time
-systems point: *the platform doesn't determine the latency floor; the
-converter does.* When the textbook discusses "analog I/O latency" it can
-point at this result and say so concretely.
+1. **Pi 5 silicon** has plenty of headroom. The RP1 I/O controller can clock
+   SPI at 50+ MHz and toggle GPIOs in single-digit nanoseconds when its
+   registers are written directly. The CPU runs the loop with 19 µs of slack
+   per iteration at 15 kSPS. None of the measured cost comes from "the Pi 5
+   is slow."
+2. **The Linux user-space interfaces we chose** (`spidev` for SPI, GPIO
+   character-device uAPI v2 for chip-select toggling) contribute about
+   **~34 µs of the 48 µs** through ioctl/syscall overhead. Every CS toggle
+   is a syscall (~5 µs on the RP1); every SPI transfer is a syscall (~5–7 µs).
+   These interfaces are portable, robust, and the conventional choice for
+   real-time work on Linux — but they are not free, and on a fast SBC the
+   per-call cost starts to matter.
+3. **The ADS1256 SINC5 filter** contributes the remaining ~167 µs of the
+   end-to-end analog latency, irrespective of how fast the software is.
+
+So *which* of these you consider "the bottleneck" depends on the question.
+
+- *For analog-to-analog latency on this hardware:* the ADS1256 filter is
+  far and away the dominant contributor. Even a perfect software loop
+  would get the end-to-end number down only from 212 µs to ~180 µs.
+- *For software-side latency on the Pi 5:* the Linux user-space interfaces
+  are dominant. Bypassing them via direct register access on the RP1 would
+  reduce the software loop from 48 µs to roughly 15 µs.
+- *For Pi-5-as-a-platform claims:* the silicon is capable of the latencies
+  the experiment was targeting; whether the user-space programming model
+  surfaces that capability is a separate question.
+
+The right textbook framing is probably the second one above: *the platform
+provides the headroom; the converter sets the analog floor; the OS interface
+chosen determines how much of the platform's headroom is actually realized.*
+All three are real, and all three matter independently.
 
 ### 5.2 Why 15 kSPS, not 30 kSPS
 
@@ -341,7 +369,42 @@ spi: note: kernel rejected SPI_NO_CS; controller CE0 will toggle
 
 — exists to document this for the reader.
 
-### 5.5 What the scope did *not* show that you might expect
+### 5.5 What would it take to hit ~10 µs end-to-end?
+
+The original aspirational target for an analog-to-analog control loop on
+this kind of platform is **~10 µs** (1/20 of a 5 kHz period). To frame what
+it would take, here are the four configurations of interest:
+
+| Configuration | Software loop | Analog floor | End-to-end |
+|---|---:|---:|---:|
+| **A.** What this report measured (Pi 5, spidev + GPIO uAPI v2, ADS1256 @ 15 kSPS, DAC8552) | 48 µs | ~167 µs (SINC5) + ~5 µs (DAC) | **212 µs (measured)** |
+| **B.** Same hardware, software ported to direct RP1 register access via `mmap` of `/dev/gpiomem0` and the SPI peripheral | ~15 µs (predicted) | ~172 µs (same) | **~187 µs (predicted)** |
+| **C.** Pi 5 + fast SAR ADC (e.g. AD7610, ADS8688, LTC2378), spidev + GPIO uAPI v2 | ~30–40 µs | ~5 µs (no decimation filter) | **~35–45 µs** |
+| **D.** Pi 5 + fast SAR ADC + direct register access for GPIO/SPI | ~5–8 µs | ~5 µs | **~10–13 µs** |
+
+What the table says concretely:
+
+- **The 10 µs target is unreachable with this HAT** at any data rate, by
+  any amount of software optimization — the ADS1256's SINC5 filter alone is
+  more than 16× over budget.
+- **The 10 µs target is reachable on the Pi 5** if both the ADC is changed
+  to a fast SAR converter (one with no decimation filter and a SPI clock
+  ceiling well above 1.92 MHz) *and* the software is rewritten against the
+  RP1's registers directly. Either one alone is not enough.
+- **The user-space Linux interface choice matters at this latency scale.**
+  At sub-100-µs budgets, the per-call cost of `ioctl` (a few µs) is
+  non-negligible. The conventional advice that "spidev is fast enough" is
+  true for kHz-rate work; at the 10 µs scale it is no longer true.
+
+These predictions for rows B–D are not measurements — they are estimates
+based on the known per-call costs of the various interfaces, the SPI bit-
+clocking time at higher clock rates, and standard SAR-ADC settling. A
+follow-up experiment that builds row B (direct register access with the
+same HAT) would empirically isolate the OS-interface cost from the silicon
+capability, and is the most natural next step if this distinction is worth
+nailing down for the textbook.
+
+### 5.6 What the scope did *not* show that you might expect
 
 - **No frequency-dependent attenuation in the measured range.** At 1 kHz
   (the upper end of the sweep) the loop's reconstructed sine on CH2 was
@@ -379,14 +442,26 @@ this report are in [the repository](https://github.com/ricopicone/rpi5-latency-e
 
 ## 7. Conclusion
 
-A Raspberry Pi 5 running a stock Debian-trixie kernel can drive the
-Waveshare High-Precision AD/DA Board through a user-space C control loop
-with **47.96 µs median processing latency** (p99 53.63 µs, max 63.52 µs)
-and a **loop period locked to the 15 kSPS conversion interval** (median
-66.74 µs vs the theoretical 66.67 µs, p99 only 1.16 µs above interval, max
-77.81 µs). Across 50 000 iterations not a single conversion was dropped.
-The end-to-end analog-to-analog latency on the scope is **212 µs**, of which
-the ADS1256's SINC5 decimation filter contributes ~167 µs. The platform is
-not the bottleneck — the converter is — which is the takeaway worth carrying
-into the textbook. A genuinely low-latency analog I/O loop on this SBC would
-require swapping the ADC, not the SBC.
+The measured end-to-end analog-to-analog latency on the Raspberry Pi 5 +
+Waveshare High-Precision AD/DA Board is **212 µs**, and the system behaves
+as a near-perfect pure transport delay over the 100 Hz – 1 kHz sweep.
+
+A clean three-way decomposition emerged:
+
+1. **~167 µs** comes from the ADS1256's SINC5 decimation filter — this is
+   set by the converter's data rate (15 kSPS) and cannot be reduced
+   in software.
+2. **~34 µs** comes from the Linux user-space interfaces the loop is built
+   on — `spidev` syscalls and GPIO uAPI v2 ioctls. Replacing these with
+   direct RP1 register access via `mmap` of `/dev/gpiomem0` would
+   eliminate most of this cost; predicted software loop ~15 µs.
+3. **~14 µs** is irreducible SPI bit-clocking on the wire at the ADS1256's
+   maximum allowed clock of 1.92 MHz, plus the 1.5 µs DAC frame.
+
+The 10 µs end-to-end target *could* be reachable on the Pi 5 if both the
+ADC is changed to a fast SAR converter (no decimation filter, SPI ≥
+10 MHz) *and* the software is rewritten against the RP1 registers
+directly (§5.5, row D). Neither change alone is sufficient. With the
+present HAT and the conventional Linux interfaces, 212 µs is the result;
+of that, ~22% is in software the textbook author could in principle fix
+and ~78% is in a converter that the textbook author would have to swap.
