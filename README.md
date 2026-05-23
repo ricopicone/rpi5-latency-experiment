@@ -180,14 +180,16 @@ analog-to-analog phase shift exceeds 18° and the criterion fails. The
 README's pre-bring-up estimate of "0.5–1 kHz" was optimistic by a factor
 of 2–4.
 
-**The Raspberry Pi 5 is not the bottleneck.** Its CPU runs the loop at 15
-kSPS with the loop period locked to the 66.67 µs conversion interval (median
-66.74 µs, max 77.81 µs across 50 000 samples). The RP1 SPI controller can
-clock far faster than the ADS1256 needs; the DAC8552 side here runs at 15.6
-MHz and contributes ~1.5 µs of bit-clocking. If the book's real-time examples
-need a genuinely low-latency analog loop, the thing to change is the **ADC**
-— a fast SAR (SPI at 20–50 MHz) or a parallel-interface converter — not the
-single-board computer.
+**Reading the software-side number honestly.** Of the 48 µs software loop,
+only **~14 µs is SPI bit-clocking on the wire**; the other **~34 µs is the
+cost of the kernel-mediated `spidev` and GPIO uAPI v2 interfaces** the loop
+uses (per-call ioctl/syscall overhead). The Pi 5 silicon is faster than the
+48 µs suggests — a port to direct register access (`mmap` of `/dev/gpiomem0`
+and the RP1 SPI peripheral) is predicted to drop the software loop to
+**~15 µs**. See REPORT.md §5.5 for the four-row table laying out which
+configurations could plausibly hit the original 10 µs aspiration. Spoiler:
+the 10 µs target is unreachable with this HAT regardless of software,
+because the ADS1256's SINC5 filter alone is ~167 µs.
 
 **Why 15 kSPS instead of 30 kSPS.** At 30 kSPS (33.3 µs interval) the loop
 median was 49.4 µs — every iteration dropped a conversion. Dropping the data

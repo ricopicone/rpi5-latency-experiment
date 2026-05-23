@@ -108,23 +108,37 @@ the full experiment description and wiring.
 
 ## Latency reality — confirmed by the bench
 
-Do **not** spend effort micro-optimizing the loop expecting to approach the
-original ~10 µs target. The latency floor is set by the **ADS1256**, not the
-Pi 5 and not this code. Measured budget at 15 kSPS:
+Measured budget at 15 kSPS:
 
 | Component | µs | Note |
 |---|---|---|
 | Software loop (DRDY → DAC chip written) | 48.0 | median over 50 000 samples |
+| &nbsp;&nbsp;of which: SPI bit-clocking on the wire (irreducible) | ~14 | ADC 12.5 + DAC 1.5 |
+| &nbsp;&nbsp;of which: spidev + GPIO uAPI v2 ioctl overhead | ~34 | 4 GPIO ioctls + 2 spidev syscalls |
 | ADS1256 SINC5 filter group delay | ~166.7 | ≈ 2.5 / f_data |
 | DAC8552 settling | ~5 | datasheet typical |
 | **Predicted total** | **~219.7** | |
 | **Measured total** | **212.3** | scope, 100 Hz–1 kHz sweep mean |
 
-The ADS1256 filter alone is ~78% of the budget; the Pi 5 + this code is
-~22%. The 1/20-period success criterion is met only up to **~238 Hz** on
-this HAT. If the textbook's examples need a genuinely low-latency loop, the
-change to make is the **ADC**, not the SBC. Loop-side optimization only
-buys lower jitter, not lower median latency.
+Three independent contributors, three different mitigations:
+
+- **ADS1256 SINC5 filter (~78%):** fixed by the converter, not by the SBC.
+  Reducing requires changing the ADC (e.g. fast SAR). Lower `ADS1256_DRATE`
+  values increase this further, not reduce it.
+- **Linux user-space interfaces (~16%):** `spidev` syscalls and GPIO uAPI v2
+  ioctls each cost a few µs per call; the loop makes 6 such calls per
+  iteration. Predicted ~15 µs (down from 48) with direct register access via
+  `mmap` of `/dev/gpiomem0` and the RP1 SPI peripheral. Trade-off: gives up
+  the portable Linux interface, becomes hardware-specific.
+- **Irreducible SPI bit-clocking (~6%):** ~14 µs at the current converter
+  clocks. Faster ADC clock (only possible by changing the ADC) and/or
+  shorter sample (fewer bytes) reduce this.
+
+Do **not** spend effort micro-optimizing the spidev/GPIO-uAPI software loop
+expecting to approach the original ~10 µs target while keeping this HAT.
+Even a perfect software loop would land at ~190 µs end-to-end because of
+the SINC5 filter. To hit 10 µs needs *both* an ADC change *and* direct
+register access on the Pi 5 (see REPORT.md §5.5 for the four-row table).
 
 ## Build & run
 
