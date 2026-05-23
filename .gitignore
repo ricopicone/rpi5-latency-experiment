@@ -1,0 +1,11 @@
+# Build artifacts
+*.o
+latency_loop
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# macOS
+.DS_Store

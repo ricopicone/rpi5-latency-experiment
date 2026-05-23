@@ -1,0 +1,26 @@
+# Frequency sweep, ADC->DAC passthrough phase shift
+# Measured on the bench, 2026-05-22.
+#
+# Hardware:
+#   - Raspberry Pi 5, Debian 13 (trixie), kernel 6.12.47+rpt-rpi-2712
+#   - Waveshare High-Precision AD/DA Board (ADS1256 + DAC8552)
+# Configuration:
+#   - ADS1256 at 15 kSPS (DRATE = 0xE0), MUX = AIN0/AINCOM, PGA = 1, buffer off
+#   - DAC8552 channel A, SPI at 15.6 MHz
+#   - C loop, SCHED_FIFO priority 80, pinned to core 3, mlockall
+# Stimulus / measurement:
+#   - Function generator: sine, 2 Vpp, +1.25 V DC offset (signal in 0.25..2.25 V)
+#   - Tektronix DPO2012B, DC coupling, 16x waveform averaging, statistics ON
+#   - Phase measured as CH1->CH2 rising-edge delay; mean over many acquisitions
+#
+freq_hz,phase_deg
+100,8.0
+200,15.6
+300,23.0
+400,30.7
+500,37.7
+600,45.7
+700,52.4
+800,59.0
+900,69.0
+1000,76.0

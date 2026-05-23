@@ -1,0 +1,390 @@
+#!/usr/bin/env python3
+"""
+analyze.py -- post-process the latency-experiment hardware data.
+
+Inputs (relative to repository root):
+    data/phase_sweep.csv        -- scope-measured CH1 -> CH2 phase per frequency
+    data/characterize_15ksps.csv -- per-sample software timings from the C loop
+
+Outputs:
+    analysis/figures/phase_vs_freq.png
+    analysis/figures/delay_vs_freq.png
+    analysis/figures/proc_latency_hist.png
+    analysis/figures/loop_period_hist.png
+    analysis/figures/budget_bar.png
+    analysis/figures/summary.png       (4-panel composite for the report)
+    stdout: a printed summary table
+
+Run from the repository root:
+    python3 analysis/analyze.py
+"""
+
+from __future__ import annotations
+
+import csv
+import os
+import sys
+from pathlib import Path
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+DATA_DIR = REPO_ROOT / "data"
+FIG_DIR = REPO_ROOT / "analysis" / "figures"
+FIG_DIR.mkdir(parents=True, exist_ok=True)
+
+# Conversion-rate interval (us) for ADS1256 at 15 kSPS.
+CONVERSION_INTERVAL_US = 1e6 / 15_000  # 66.667 us
+
+# 1/20-period success criterion, in degrees of phase shift.
+PHASE_CRITERION_DEG = 360.0 / 20.0  # 18 deg
+
+
+# ---------------------------------------------------------------------------
+# Data loading
+# ---------------------------------------------------------------------------
+def load_phase_sweep(path: Path) -> tuple[np.ndarray, np.ndarray]:
+    """Load the comment-tolerant phase sweep CSV: returns (freq_hz, phase_deg)."""
+    freqs: list[float] = []
+    phases: list[float] = []
+    with path.open() as f:
+        for line in f:
+            s = line.strip()
+            if not s or s.startswith("#") or s.startswith("freq"):
+                continue
+            parts = s.split(",")
+            freqs.append(float(parts[0]))
+            phases.append(float(parts[1]))
+    return np.asarray(freqs), np.asarray(phases)
+
+
+def load_characterize(path: Path) -> dict[str, np.ndarray]:
+    """Load the per-sample CSV from --csv mode. ns columns are kept as ns."""
+    cols: dict[str, list[float]] = {
+        "adc_read_ns": [],
+        "dac_write_ns": [],
+        "proc_ns": [],
+        "loop_ns": [],
+    }
+    with path.open() as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            for k in cols:
+                cols[k].append(float(row[k]))
+    return {k: np.asarray(v) for k, v in cols.items()}
+
+
+# ---------------------------------------------------------------------------
+# Statistics helpers
+# ---------------------------------------------------------------------------
+def percentiles_us(samples_ns: np.ndarray) -> dict[str, float]:
+    """Return min/median/p90/p99/max/mean of `samples_ns` in microseconds."""
+    us = samples_ns * 1e-3
+    return {
+        "min": float(np.min(us)),
+        "median": float(np.median(us)),
+        "p90": float(np.percentile(us, 90)),
+        "p99": float(np.percentile(us, 99)),
+        "max": float(np.max(us)),
+        "mean": float(np.mean(us)),
+    }
+
+
+def fmt_row(name: str, p: dict[str, float]) -> str:
+    return (f"  {name:<22} "
+            f"min {p['min']:8.2f}  med {p['median']:8.2f}  "
+            f"p90 {p['p90']:8.2f}  p99 {p['p99']:8.2f}  "
+            f"max {p['max']:9.2f}  mean {p['mean']:8.2f}")
+
+
+# ---------------------------------------------------------------------------
+# Plot helpers
+# ---------------------------------------------------------------------------
+def _save(fig: plt.Figure, name: str) -> Path:
+    out = FIG_DIR / name
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return out
+
+
+def plot_phase_vs_freq(freqs: np.ndarray, phases: np.ndarray) -> Path:
+    # Linear fit (forced through origin since phase = 360 * tau * f and tau > 0).
+    tau_s = np.sum(freqs * phases) / np.sum(freqs * freqs) / 360.0
+    fit_phases = 360.0 * tau_s * freqs
+    f_crit = PHASE_CRITERION_DEG / (360.0 * tau_s)
+
+    fig, ax = plt.subplots(figsize=(6.5, 4.2))
+    ax.plot(freqs, phases, "o", color="C0", label="scope measurement", zorder=3)
+    ax.plot(freqs, fit_phases, "-", color="C1",
+            label=f"fit: $\\phi = 360\\,\\tau\\,f$, $\\tau$ = {tau_s*1e6:.1f} µs",
+            zorder=2)
+    ax.axhline(PHASE_CRITERION_DEG, color="C3", linestyle="--",
+               label=f"1/20-period limit ({PHASE_CRITERION_DEG:.0f}°)")
+    ax.axvline(f_crit, color="C3", linestyle=":",
+               label=f"crossing: {f_crit:.0f} Hz")
+    ax.set_xlabel("Frequency (Hz)")
+    ax.set_ylabel("Phase shift CH1→CH2 (degrees)")
+    ax.set_title("Analog-to-analog phase shift vs frequency")
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="lower right")
+    return _save(fig, "phase_vs_freq.png")
+
+
+def plot_delay_vs_freq(freqs: np.ndarray, phases: np.ndarray) -> Path:
+    delays_us = (phases / 360.0) * (1.0 / freqs) * 1e6
+    mean_us = float(np.mean(delays_us))
+    std_us = float(np.std(delays_us, ddof=1))
+
+    fig, ax = plt.subplots(figsize=(6.5, 4.2))
+    ax.plot(freqs, delays_us, "o", color="C0", label="per-frequency delay", zorder=3)
+    ax.axhline(mean_us, color="C2", linestyle="-",
+               label=f"mean = {mean_us:.1f} µs")
+    ax.fill_between(freqs, mean_us - std_us, mean_us + std_us,
+                    color="C2", alpha=0.15,
+                    label=f"±1σ = ±{std_us:.1f} µs")
+    ax.set_xlabel("Frequency (Hz)")
+    ax.set_ylabel("End-to-end delay (µs)")
+    ax.set_title("Pure-delay model check: delay is constant with frequency")
+    ax.set_ylim(mean_us - 4 * std_us, mean_us + 4 * std_us)
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="upper right")
+    return _save(fig, "delay_vs_freq.png")
+
+
+def plot_proc_latency_hist(proc_ns: np.ndarray) -> Path:
+    p = percentiles_us(proc_ns)
+    us = proc_ns * 1e-3
+    fig, ax = plt.subplots(figsize=(6.5, 4.2))
+    ax.hist(us, bins=np.arange(p["min"] - 1, p["max"] + 1, 0.2),
+            color="C0", edgecolor="none")
+    ax.axvline(p["median"], color="C1", linestyle="-",
+               label=f"median {p['median']:.2f} µs")
+    ax.axvline(p["p99"], color="C3", linestyle="--",
+               label=f"p99 {p['p99']:.2f} µs")
+    ax.axvline(p["max"], color="C4", linestyle=":",
+               label=f"max {p['max']:.2f} µs")
+    ax.set_xlabel("Processing latency (µs)  — DRDY asserted → DAC chip written")
+    ax.set_ylabel("Count")
+    ax.set_title(f"Software processing latency, n = {len(us)} samples")
+    ax.set_yscale("log")
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="upper right")
+    return _save(fig, "proc_latency_hist.png")
+
+
+def plot_loop_period_hist(loop_ns: np.ndarray) -> Path:
+    p = percentiles_us(loop_ns)
+    us = loop_ns * 1e-3
+    fig, ax = plt.subplots(figsize=(6.5, 4.2))
+    ax.hist(us, bins=np.arange(p["min"] - 1, p["max"] + 1, 0.2),
+            color="C0", edgecolor="none")
+    ax.axvline(CONVERSION_INTERVAL_US, color="C2", linestyle="-",
+               label=f"15 kSPS interval {CONVERSION_INTERVAL_US:.2f} µs")
+    ax.axvline(p["median"], color="C1", linestyle="--",
+               label=f"median {p['median']:.2f} µs")
+    ax.axvline(p["max"], color="C4", linestyle=":",
+               label=f"max {p['max']:.2f} µs")
+    ax.set_xlabel("Loop period (µs)")
+    ax.set_ylabel("Count")
+    ax.set_title(f"Iteration period, n = {len(us)} samples")
+    ax.set_yscale("log")
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="upper right")
+    return _save(fig, "loop_period_hist.png")
+
+
+def plot_budget_bar(software_us: float, measured_total_us: float) -> Path:
+    # SINC5 group delay for ADS1256 at 15 kSPS ≈ 2.5 / f_data. DAC8552 settling
+    # taken as the datasheet typical (~5 us). The "predicted" total is the
+    # sum; the "measured" total comes from the scope sweep.
+    sinc_delay_us = 2.5 / 15_000 * 1e6   # 166.7 us
+    dac_settle_us = 5.0
+    predicted = software_us + sinc_delay_us + dac_settle_us
+
+    components = [
+        ("Software loop\n(DRDY → DAC write)", software_us, "C0"),
+        ("ADS1256 SINC5\nfilter group delay", sinc_delay_us, "C1"),
+        ("DAC8552\nsettling", dac_settle_us, "C2"),
+    ]
+
+    fig, ax = plt.subplots(figsize=(7.5, 4.5))
+    bottom = 0.0
+    for name, val, color in components:
+        ax.bar(["predicted total"], [val], bottom=bottom, color=color, label=name)
+        ax.text(0, bottom + val / 2, f"{val:.1f} µs",
+                ha="center", va="center", color="white", fontsize=10, fontweight="bold")
+        bottom += val
+    ax.bar(["scope-measured\ntotal"], [measured_total_us], color="C7",
+           label=f"scope measured ({measured_total_us:.1f} µs)")
+    ax.text(1, measured_total_us / 2, f"{measured_total_us:.1f} µs",
+            ha="center", va="center", color="white", fontsize=10, fontweight="bold")
+    ax.set_ylabel("Latency (µs)")
+    ax.set_title(f"Latency budget: predicted {predicted:.1f} µs vs measured {measured_total_us:.1f} µs")
+    ax.grid(True, axis="y", alpha=0.3)
+    ax.legend(loc="upper right", framealpha=0.95)
+    return _save(fig, "budget_bar.png")
+
+
+def plot_summary(
+    freqs: np.ndarray,
+    phases: np.ndarray,
+    delays_us: np.ndarray,
+    proc_ns: np.ndarray,
+    loop_ns: np.ndarray,
+    software_us: float,
+    measured_total_us: float,
+) -> Path:
+    """Four-panel composite for the report."""
+    fig, axes = plt.subplots(2, 2, figsize=(11.0, 7.5))
+
+    # Panel A: phase vs freq
+    ax = axes[0, 0]
+    tau_s = np.sum(freqs * phases) / np.sum(freqs * freqs) / 360.0
+    f_crit = PHASE_CRITERION_DEG / (360.0 * tau_s)
+    ax.plot(freqs, phases, "o", color="C0", zorder=3)
+    ax.plot(freqs, 360.0 * tau_s * freqs, "-", color="C1",
+            label=f"linear fit, $\\tau$ = {tau_s*1e6:.1f} µs")
+    ax.axhline(PHASE_CRITERION_DEG, color="C3", linestyle="--",
+               label=f"1/20-period limit ({PHASE_CRITERION_DEG:.0f}°)")
+    ax.axvline(f_crit, color="C3", linestyle=":",
+               label=f"crossing: {f_crit:.0f} Hz")
+    ax.set_xlabel("Frequency (Hz)")
+    ax.set_ylabel("Phase shift (deg)")
+    ax.set_title("(a) Phase shift vs frequency")
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="lower right", fontsize=8)
+
+    # Panel B: delay vs freq
+    ax = axes[0, 1]
+    mean_us = float(np.mean(delays_us))
+    std_us = float(np.std(delays_us, ddof=1))
+    ax.plot(freqs, delays_us, "o", color="C0", zorder=3)
+    ax.axhline(mean_us, color="C2", label=f"mean {mean_us:.1f} µs")
+    ax.fill_between(freqs, mean_us - std_us, mean_us + std_us,
+                    color="C2", alpha=0.15, label=f"±1σ ±{std_us:.1f} µs")
+    ax.set_xlabel("Frequency (Hz)")
+    ax.set_ylabel("Delay (µs)")
+    ax.set_title("(b) End-to-end delay is constant with frequency")
+    ax.set_ylim(mean_us - 4 * std_us, mean_us + 4 * std_us)
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="upper right", fontsize=8)
+
+    # Panel C: software latency histogram
+    ax = axes[1, 0]
+    p = percentiles_us(proc_ns)
+    us = proc_ns * 1e-3
+    ax.hist(us, bins=np.arange(p["min"] - 1, p["max"] + 1, 0.2),
+            color="C0", edgecolor="none")
+    ax.axvline(p["median"], color="C1", linestyle="-",
+               label=f"median {p['median']:.2f} µs")
+    ax.axvline(p["p99"], color="C3", linestyle="--",
+               label=f"p99 {p['p99']:.2f} µs")
+    ax.set_xlabel("Software processing latency (µs)")
+    ax.set_ylabel("Count")
+    ax.set_yscale("log")
+    ax.set_title(f"(c) Processing latency, n = {len(us)}")
+    ax.grid(True, alpha=0.3)
+    ax.legend(loc="upper right", fontsize=8)
+
+    # Panel D: budget bar
+    ax = axes[1, 1]
+    sinc_delay_us = 2.5 / 15_000 * 1e6
+    dac_settle_us = 5.0
+    components = [
+        ("Software loop", software_us, "C0"),
+        ("ADS1256 SINC5\ngroup delay", sinc_delay_us, "C1"),
+        ("DAC8552 settling", dac_settle_us, "C2"),
+    ]
+    bottom = 0.0
+    for name, val, color in components:
+        ax.bar(["predicted"], [val], bottom=bottom, color=color, label=f"{name} ({val:.1f} µs)")
+        bottom += val
+    ax.bar(["measured"], [measured_total_us], color="C7",
+           label=f"scope total ({measured_total_us:.1f} µs)")
+    ax.set_ylabel("Latency (µs)")
+    ax.set_title("(d) Latency budget")
+    ax.grid(True, axis="y", alpha=0.3)
+    ax.legend(loc="upper left", fontsize=8, framealpha=0.95)
+
+    fig.suptitle("Analog-to-analog latency, Raspberry Pi 5 + Waveshare HP AD/DA "
+                 "(ADS1256 @ 15 kSPS)", fontsize=12)
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    return _save(fig, "summary.png")
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+def main() -> int:
+    sweep_path = DATA_DIR / "phase_sweep.csv"
+    char_path = DATA_DIR / "characterize_15ksps.csv"
+    for p in (sweep_path, char_path):
+        if not p.exists():
+            sys.stderr.write(f"error: missing data file: {p}\n")
+            return 1
+
+    freqs, phases = load_phase_sweep(sweep_path)
+    cdata = load_characterize(char_path)
+
+    # Per-frequency delay (us) from phase + period.
+    delays_us = (phases / 360.0) * (1.0 / freqs) * 1e6
+    delay_mean_us = float(np.mean(delays_us))
+    delay_std_us = float(np.std(delays_us, ddof=1))
+
+    proc = percentiles_us(cdata["proc_ns"])
+    loop = percentiles_us(cdata["loop_ns"])
+    adc = percentiles_us(cdata["adc_read_ns"])
+    dac = percentiles_us(cdata["dac_write_ns"])
+
+    # -- Console summary -----------------------------------------------------
+    print("=" * 78)
+    print("Analog-to-analog latency experiment -- analysis")
+    print("=" * 78)
+    print()
+    print(f"Phase sweep:        {len(freqs)} frequencies "
+          f"({freqs[0]:.0f}..{freqs[-1]:.0f} Hz)")
+    print(f"Software samples:   {len(cdata['proc_ns'])}  (15 kSPS, "
+          f"interval {CONVERSION_INTERVAL_US:.2f} µs)")
+    print()
+    print("End-to-end delay (scope, CH1->CH2):")
+    for f, ph, d in zip(freqs, phases, delays_us):
+        print(f"  {int(f):>5d} Hz   {ph:5.2f} deg   ->   {d:6.1f} µs")
+    print(f"  mean = {delay_mean_us:.1f} µs   std = {delay_std_us:.1f} µs   "
+          f"(n = {len(delays_us)})")
+    print()
+
+    tau_s = float(np.sum(freqs * phases) / np.sum(freqs * freqs) / 360.0)
+    f_crit = float(PHASE_CRITERION_DEG / (360.0 * tau_s))
+    print(f"Linear fit through origin: tau = {tau_s*1e6:.1f} µs")
+    print(f"1/20-period success limit ({PHASE_CRITERION_DEG:.0f}°) crossed at "
+          f"{f_crit:.0f} Hz")
+    print()
+
+    print("Software timings (microseconds, from per-sample CSV):")
+    print(fmt_row("ADC read (DRDY->ADC)", adc))
+    print(fmt_row("DAC write (ADC->DAC)", dac))
+    print(fmt_row("processing latency", proc))
+    print(fmt_row("loop period", loop))
+    print()
+
+    # -- Plots ---------------------------------------------------------------
+    out = []
+    out.append(plot_phase_vs_freq(freqs, phases))
+    out.append(plot_delay_vs_freq(freqs, phases))
+    out.append(plot_proc_latency_hist(cdata["proc_ns"]))
+    out.append(plot_loop_period_hist(cdata["loop_ns"]))
+    out.append(plot_budget_bar(proc["median"], delay_mean_us))
+    out.append(plot_summary(freqs, phases, delays_us,
+                            cdata["proc_ns"], cdata["loop_ns"],
+                            proc["median"], delay_mean_us))
+
+    print("Wrote figures:")
+    for p in out:
+        print(f"  {p.relative_to(REPO_ROOT)}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
