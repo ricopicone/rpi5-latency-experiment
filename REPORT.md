@@ -434,12 +434,23 @@ digital code in a few microseconds at most. For "fast" SBC-class analog
 I/O loops, SAR is the usual choice. To frame what it would take, here are
 the four configurations of interest:
 
+"Software loop" in the table below means *the time the user-space C loop
+spends in its critical path per iteration*. Importantly, it **includes
+the time the CPU spends spinning on the SPI controller's status
+register while bits clock out on the wire** — those microseconds are
+"software" in the sense that they are in the loop's timing budget, but
+they are not CPU instructions; the CPU is just waiting on hardware. On
+this HAT, ~12.5 µs of the Phase 3 software median is precisely this
+wait-for-the-ADS1256-wire time. A faster ADC clock shrinks that wait
+dramatically, which is why rows C and D show "software" numbers below
+the Phase 3 measurement: the *code* is the same, the *wire* is faster.
+
 | Configuration | Software loop | Analog floor | End-to-end |
 |---|---:|---:|---:|
 | **A.** What this report measured (Pi 5, spidev + GPIO uAPI v2, ADS1256 @ 15 kSPS, DAC8552) | 48 µs | ~167 µs (SINC5) + ~5 µs (DAC) | **212 µs (measured)** |
 | **B.** Same hardware, software ported to direct RP1 register access via `mmap` for both GPIO and SPI peripheral (Phase 3) | **19.2 µs (measured)** | ~172 µs (same) | **~191 µs (predicted from B's software + A's analog)** |
 | **C.** Pi 5 + fast SAR ADC (e.g. AD7610, ADS8688, LTC2378), spidev + GPIO uAPI v2 | ~30–40 µs | ~5 µs (no decimation filter) | **~35–45 µs** |
-| **D.** Pi 5 + fast SAR ADC + direct register access for GPIO/SPI | ~6–9 µs (refined by Phase 3 data) | ~5 µs | **~12–15 µs** |
+| **D.** Pi 5 + fast SAR ADC + direct register access for GPIO/SPI | ~6–9 µs (Phase 3 code + faster wire — see §6.3) | ~5 µs | **~12–15 µs** |
 
 What the table says concretely:
 
@@ -704,25 +715,55 @@ Loop period is back at 66.37 µs (one sample per conversion); the
 double-read regime of §6.2.5 is gone because the loop is no longer faster
 than the conversion interval.
 
+**Decomposing the 19.15 µs.** Most of the "software" time is actually
+*the CPU spinning on the SPI controller's status register while bits clock
+out on the wire* — not instructions the CPU executes. The breakdown,
+derived from the per-phase measured medians:
+
+| Slice of the 19.15 µs | µs | Source |
+|---|---:|---|
+| ADS1256 3-byte SPI read on the wire @ 1.92 MHz                | 12.5 | `(3 × 8) / 1.92 MHz`, hard cap from datasheet |
+| ADC-side register config + spin on `SR.RXFLR` + GPIO CS       | ~3.3 | measured ADC read (15.81 µs) − 12.5 µs on-wire |
+| DAC8552 3-byte SPI write on the wire @ 14.3 MHz               | ~1.5 | `(3 × 8) / 14.3 MHz` |
+| DAC-side register config + spin on `SR.BUSY` + GPIO CS        | ~1.9 | measured DAC write (3.35 µs) − 1.5 µs on-wire |
+| **Sum** | **~19.2** | matches the measured 19.15 µs ✓ |
+
+The **12.5 µs of ADC bit-clocking dominates** — that is intrinsic to the
+ADS1256's `f_CLKIN/4 ≈ 1.92 MHz` SPI clock cap and *not* to the Pi 5. The
+per-direction config + spin + GPIO totals (~3.3 µs on the ADC side,
+~1.9 µs on the DAC side) are the real Pi-5-software residual; everything
+else is just waiting for the wire.
+
 **Implication for the row-D end-to-end prediction.** With the ADS1256 in
 place, the analog-to-analog total predicted from Phase 3 is:
 
-> 19.15 µs (software) + ~167 µs (SINC5) + ~5 µs (DAC settling) ≈ **191 µs end-to-end**
+> 19.15 µs (software, of which 12.5 µs is the slow ADS1256 wire clocking) + ~167 µs (SINC5) + ~5 µs (DAC settling) ≈ **191 µs end-to-end**
 
 — about 21 µs lower than the measured 212 µs with the original software,
 but the SINC5 filter still completely dominates.
 
 With a fast SAR ADC (replacing the ADS1256 — a hardware change, not a
-software one), the ADC SPI read at 20+ MHz would take ~1 µs on the wire,
-the SAR conversion ~1–2 µs, and there is no decimation filter:
+software one), the ADC SPI read at 20 MHz would take only ~1 µs on the
+wire (down from 12.5 µs), and there is no decimation filter. The
+per-direction config/spin/GPIO costs stay about the same (the code is the
+same; only the wire is faster):
 
-> ~1 µs SAR conversion + ~1 µs ADC on-wire SPI + ~3 µs DAC write (Phase 3) +  ~5 µs DAC settling + ~2 µs GPIO + ~1 µs misc ≈ **~13 µs end-to-end (predicted)**
+| Slice (row D prediction) | µs |
+|---|---:|
+| SAR ADC 16-bit SPI read on the wire @ 20 MHz | ~1 |
+| ADC-side register config + spin + GPIO (same as today) | ~3 |
+| DAC 3-byte SPI write on the wire @ 14.3 MHz | ~1.5 |
+| DAC-side register config + spin + GPIO (same as today) | ~1.9 |
+| **Sum** | **~7.4 µs software** |
+
+End-to-end then = ~7.4 µs software + ~5 µs DAC settling (which happens
+*after* the software writes the code) + ~1–2 µs SAR conversion latency
+(usually overlapped with the SPI read) ≈ **~12–14 µs end-to-end (predicted)**.
 
 Close to but probably not comfortably below the 10 µs aspirational
 target. The Pi 5 + Phase 3 + fast SAR ADC is at the **~12–15 µs class**,
 not the ~5 µs class — the irreducible cost of register-mediated SPI and
-the time it takes a SAR to track-and-hold sets that floor on this
-platform.
+the DAC's analog settling sets that floor on this platform.
 
 ### 6.4 Decision matrix at the end of each phase
 
