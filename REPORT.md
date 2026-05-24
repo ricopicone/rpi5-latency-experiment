@@ -292,11 +292,16 @@ The honest way to read the 48 µs software number is in three layers:
    is slow."
 2. **The Linux user-space interfaces we chose** (`spidev` for SPI, GPIO
    character-device uAPI v2 for chip-select toggling) contribute about
-   **~34 µs of the 48 µs** through ioctl/syscall overhead. Every CS toggle
-   is a syscall (~5 µs on the RP1); every SPI transfer is a syscall (~5–7 µs).
-   These interfaces are portable, robust, and the conventional choice for
-   real-time work on Linux — but they are not free, and on a fast SBC the
-   per-call cost starts to matter.
+   **~34 µs of the 48 µs** through ioctl/syscall overhead. The split is
+   dominated by `spidev`: each `SPI_IOC_MESSAGE` ioctl reconfigures the
+   SPI controller, blocks until the transfer completes, and returns,
+   costing ~14 µs for the ADC transfer and ~17 µs for the DAC transfer
+   (the per-call cost includes the on-wire bit-clocking inside it). The
+   GPIO uAPI v2 CS toggles are comparatively cheap — ~500 ns per call,
+   ~2 µs total per iteration — but they were the easier path to optimize
+   first, so Phase 2 of §6 retired them. The remaining ~30 µs of spidev
+   overhead is the gate that Phase 3 attacks. See §5.3 for the
+   per-component breakdown and §6.2 for the empirical source.
 3. **The ADS1256 SINC5 filter** contributes the remaining ~167 µs of the
    end-to-end analog latency, irrespective of how fast the software is.
 
