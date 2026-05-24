@@ -499,6 +499,18 @@ would then cost < 2 µs total — comfortably inside a 15 µs software budget.
 overhead even at the register level, in which case row D is unsupported and
 the Pi 5 is not the right platform for a ~10 µs loop.
 
+**Result (2026-05-24): PASS.** Measured on the bench Pi 5 with the program
+`feasibility/bench_gpio_toggle.c` (10⁷ set-clr cycles = 2 × 10⁷ toggles
+on GPIO5):
+
+> **25.0 ns per toggle** (≈ 40 MHz toggle rate)
+
+That is **20× under** the pass gate of ≤ 500 ns and ~200× faster than the
+~5 µs/toggle GPIO uAPI v2 ioctl path that the current `gpio.c` uses. The
+four chip-select toggles per loop iteration that today cost ~20 µs of the
+48 µs software median would, via this path, cost ~100 ns — essentially
+free. Phase 2 is justified.
+
 ### 6.2 Phase 2 — `mmap`'d-GPIO drop-in for the existing loop
 
 **What.** Replace only the GPIO portion of `gpio.c` with `mmap`-based RP1
