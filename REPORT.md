@@ -427,23 +427,26 @@ What the table says concretely:
 
 - **The 10 µs target is unreachable with this HAT** at any data rate, by
   any amount of software optimization — the ADS1256's SINC5 filter alone is
-  more than 16× over budget.
-- **The 10 µs target is reachable on the Pi 5** if both the ADC is changed
-  to a fast SAR converter (one with no decimation filter and a SPI clock
-  ceiling well above 1.92 MHz) *and* the software is rewritten against the
-  RP1's registers directly. Either one alone is not enough.
+  more than 16× over budget. This conclusion is firm: it follows directly
+  from the converter datasheet and does not depend on any unverified
+  software prediction.
+- **The 10 µs target is *predicted* reachable on the Pi 5** if both the ADC
+  is changed to a fast SAR converter (one with no decimation filter and a
+  SPI clock ceiling well above 1.92 MHz) *and* the software is rewritten
+  against the RP1's registers directly. Either change alone is not enough.
+  **This prediction is not yet measured end-to-end** — see §6 for the
+  feasibility test that would either confirm it or rule the Pi 5 out for
+  this latency class.
 - **The user-space Linux interface choice matters at this latency scale.**
   At sub-100-µs budgets, the per-call cost of `ioctl` (a few µs) is
   non-negligible. The conventional advice that "spidev is fast enough" is
   true for kHz-rate work; at the 10 µs scale it is no longer true.
 
-These predictions for rows B–D are not measurements — they are estimates
-based on the known per-call costs of the various interfaces, the SPI bit-
-clocking time at higher clock rates, and standard SAR-ADC settling. A
-follow-up experiment that builds row B (direct register access with the
-same HAT) would empirically isolate the OS-interface cost from the silicon
-capability, and is the most natural next step if this distinction is worth
-nailing down for the textbook.
+The estimates in rows B–D are based on known per-call costs of the various
+Linux interfaces (community-reported and kernel-source-derived), the SPI
+bit-clocking time at higher clock rates, and standard SAR-ADC settling.
+None of B, C, or D has been measured here yet; the §6 plan converts them,
+phase by phase, into measurements.
 
 ### 5.6 What the scope did *not* show that you might expect
 
@@ -462,7 +465,105 @@ nailing down for the textbook.
 
 ---
 
-## 6. Reproducing the measurements
+## 6. Feasibility test plan (for the ~10 µs prediction)
+
+§5.5 row D predicts that the Pi 5 can hit ~10 µs analog-to-analog if both
+(a) the ADS1256 is replaced by a fast SAR ADC and (b) the loop is rewritten
+against the RP1's GPIO and SPI registers directly, bypassing `spidev` and
+GPIO uAPI v2. The prediction is built from per-component costs taken from
+datasheets and from published Linux-interface latencies, but the components
+have not been *measured composing* on this platform — and (b), the
+platform-side claim, is the more uncertain of the two. Before any new
+hardware is bought, we want empirical evidence that (b) holds.
+
+The plan below tests (b) in three phases, with a falsification gate at each
+transition. It uses only the hardware already on the bench: a Pi 5 with the
+existing Waveshare HAT. No new ADC is purchased until and unless Phase 3
+passes.
+
+### 6.1 Phase 1 — RP1 GPIO direct-register toggle micro-benchmark
+
+**What.** A standalone C program that `mmap`s `/dev/gpiomem0`, finds the
+RP1 GPIO output-set / output-clear registers, toggles a single output pin
+in a tight loop for 10⁷ iterations, and reports nanoseconds per toggle.
+
+**Risk addressed.** Whether the RP1's GPIO `mmap` path is actually fast on
+this chip. BCM2835-era Pis hit ~30 ns/toggle in this style, but the RP1 is
+a different I/O controller, and the "~200 ns/toggle" figure in the row B/D
+predictions is community-reported rather than measured here.
+
+**Pass gate.** ≤ 500 ns/toggle. Four chip-select toggles per loop iteration
+would then cost < 2 µs total — comfortably inside a 15 µs software budget.
+
+**Fail gate.** > 1 µs/toggle. Means the RP1 GPIO path has unexpected
+overhead even at the register level, in which case row D is unsupported and
+the Pi 5 is not the right platform for a ~10 µs loop.
+
+### 6.2 Phase 2 — `mmap`'d-GPIO drop-in for the existing loop
+
+**What.** Replace only the GPIO portion of `gpio.c` with `mmap`-based RP1
+register accesses (the four chip-select toggles, the DRDY input read, the
+ADS1256 RESET output). Leave `spidev` in place for the SPI transfers — the
+ADS1256's 1.92 MHz clock cap dominates the SPI side anyway. Build and
+re-run `latency_loop --mode characterize -n 50000`.
+
+**Risk addressed.** Whether killing the GPIO uAPI v2 ioctls actually moves
+the loop median by the predicted amount when wired into the real loop (vs.
+just in a micro-benchmark).
+
+**Predicted outcome.** Software median drops from the currently measured
+47.96 µs to ~28 µs (removing 4 × ~5 µs GPIO ioctls saves ~20 µs;
+everything else unchanged).
+
+**Pass gate.** Software median ≤ 32 µs.
+
+**Fail gate.** Software median > 40 µs, or loop-period jitter blows up.
+Means there is hidden cost (cache contention with the kernel `spidev`
+driver, interrupt activity, etc.) that the GPIO change alone cannot fix.
+
+**Bonus.** The Phase 2 result is itself the *measured* counterpart to row
+B in §5.5 (same HAT, direct register access for GPIO only). That row will
+be updated from "predicted ~187 µs end-to-end" to a real number.
+
+### 6.3 Phase 3 — Direct SPI register access
+
+**What.** Replace `spidev` calls with `mmap`'d access to the RP1 SPI
+peripheral registers — manual TX-FIFO push, status polling, RX-FIFO pop.
+Reference material: the Linux kernel driver `drivers/spi/spi-rp1.c` and
+the RP1 peripheral document. Build, re-run `characterize`.
+
+**Risk addressed.** Whether the SPI side of the kernel-bypass path actually
+works on the RP1, and at what per-transfer cost. This is the decisive
+gate: if the SPI side cannot be cut down, the whole "~15 µs software loop"
+prediction fails regardless of how fast GPIO turns out to be.
+
+**Predicted outcome.** Software median drops to ~14–17 µs — essentially
+just the SPI bit-clocking on the wire (~14 µs at the ADS1256's clock
+ceiling) plus a few µs of register-level setup.
+
+**Pass gate.** Software median ≤ 20 µs.
+
+**Fail gate.** Software median > 25 µs after the rewrite. Means there is
+RP1-specific SPI overhead we cannot easily eliminate even at the register
+level.
+
+### 6.4 Decision matrix at the end of each phase
+
+| Phase | Outcome | Implication |
+|---|---|---|
+| 1 | pass | GPIO is not the obstacle. Proceed to Phase 2. |
+| 1 | fail | Stop. Pi 5 platform is not viable for ~10 µs loops. No ADC purchase. |
+| 2 | pass | Linux-kernel-bypass on the GPIO side is real and gives the predicted speedup. Row B of §5.5 becomes a measurement. Proceed to Phase 3. |
+| 2 | fail | Hidden Pi-5 cost dominates; reconsider whether to continue. |
+| 3 | pass | Pi 5 software path can sustain ~15 µs. Combined with the well-understood ~5 µs floor of a fast SAR ADC + DAC8552 settling, the ~10 µs end-to-end target is empirically supported on the platform side. Buying a fast SAR ADC HAT becomes a justified next step. |
+| 3 | fail | We have a measured upper bound on what the Pi 5 + Linux can deliver, with no new hardware bought, and a defensible reason to evaluate a different platform (microcontroller, RT-FPGA, etc.) instead. |
+
+Results of each phase will be appended to this section as they are
+measured, and §5.5 / §8 will be tightened accordingly.
+
+---
+
+## 7. Reproducing the measurements
 
 ```sh
 # from this directory, on the Mac (with SSH to the Pi configured):
@@ -481,7 +582,7 @@ this report are in the repository.
 
 ---
 
-## 7. Conclusion
+## 8. Conclusion
 
 The measured end-to-end analog-to-analog latency on the Raspberry Pi 5 +
 Waveshare High-Precision AD/DA Board is **212 µs**, and the system behaves
@@ -502,7 +603,15 @@ A clean three-way decomposition emerged:
 The 10 µs end-to-end target *could* be reachable on the Pi 5 if both the
 ADC is changed to a fast SAR converter (no decimation filter, SPI ≥
 10 MHz) *and* the software is rewritten against the RP1 registers
-directly (§5.5, row D). Neither change alone is sufficient. With the
-present HAT and the conventional Linux interfaces, 212 µs is the result;
-of that, ~22% is in software the textbook author could in principle fix
-and ~78% is in a converter that the textbook author would have to swap.
+directly (§5.5, row D) — but the platform side of that prediction has not
+yet been verified end-to-end. §6 lays out a staged experiment, using only
+hardware already on the bench, that either confirms the prediction or
+falsifies it without any new hardware purchase. Until Phase 3 of that
+test passes, the 10 µs claim should be read as "predicted, pending
+empirical check."
+
+Neither the ADC change nor the software rewrite alone is sufficient.
+With the present HAT and the conventional Linux interfaces, 212 µs is the
+result; of that, ~22% is in software the textbook author could in
+principle fix and ~78% is in a converter that the textbook author would
+have to swap.
