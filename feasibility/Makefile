@@ -5,7 +5,7 @@ CC      ?= gcc
 CFLAGS  ?= -O2 -Wall -Wextra -std=gnu11 -I..
 LDFLAGS ?=
 
-PROGS := bench_gpio_toggle latency_loop_mmap latency_loop_2fd
+PROGS := bench_gpio_toggle latency_loop_mmap latency_loop_2fd latency_loop_p3 spi_peek
 
 all: $(PROGS)
 
@@ -31,6 +31,20 @@ latency_loop_2fd: $(LL2_OBJS)
 latency_loop_2fd.o: latency_loop_2fd.c ../config.h ../gpio.h ../ads1256.h ../dac8552.h
 	$(CC) $(CFLAGS) -c -o $@ latency_loop_2fd.c
 
+# Phase 3 binary: direct mmap'd access to the RP1 SPI peripheral registers,
+# bypassing spidev entirely. Uses gpio_mmap.c for fast CS.
+LL3_OBJS := latency_loop_p3.o ads1256.o dac8552.o gpio_mmap.o
+
+latency_loop_p3: $(LL3_OBJS)
+	$(CC) $(CFLAGS) -o $@ $(LL3_OBJS) $(LDFLAGS)
+
+latency_loop_p3.o: latency_loop_p3.c spi_rp1.h ../config.h ../gpio.h ../ads1256.h ../dac8552.h
+	$(CC) $(CFLAGS) -c -o $@ latency_loop_p3.c
+
+# Diagnostic: peek at the SPI controller's current register state.
+spi_peek: spi_peek.c
+	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
+
 # Compile the parent project's sources into this directory's object files.
 latency_loop.o: ../latency_loop.c ../config.h ../spidev_util.h ../gpio.h ../ads1256.h ../dac8552.h
 	$(CC) $(CFLAGS) -c -o $@ ../latency_loop.c
@@ -45,6 +59,6 @@ gpio_mmap.o: gpio_mmap.c ../gpio.h ../config.h
 	$(CC) $(CFLAGS) -c -o $@ gpio_mmap.c
 
 clean:
-	rm -f $(PROGS) $(LL_OBJS) $(LL2_OBJS)
+	rm -f $(PROGS) $(LL_OBJS) $(LL2_OBJS) $(LL3_OBJS)
 
 .PHONY: all clean
