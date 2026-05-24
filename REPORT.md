@@ -340,27 +340,38 @@ filter is the dominant term.
 
 ### 5.3 Where the software 48 µs goes
 
-The C loop's measured 47.96 µs comes out of three distinct cost categories,
-in roughly increasing fraction:
+The C loop's measured 47.96 µs comes out of three distinct cost categories.
+The per-component numbers below were originally paper estimates, then
+**empirically revised by the Phase 2 experiment (§6.2)** — replacing the
+GPIO uAPI v2 path with direct `mmap`'d register access saved ~2 µs total,
+not the ~20 µs the original estimates predicted. The revised picture:
 
-1. **SPI bytes on the wire (irreducible, ≈ 14 µs).** The ADS1256's SPI
-   clock is capped at `f_CLKIN / 4 ≈ 1.92 MHz`, so its 3-byte sample takes
-   `(3 × 8) / 1.92 MHz ≈ 12.5 µs` to clock in. The DAC8552 runs at 15.6 MHz,
-   so its 3-byte write is on the wire in only `≈ 1.5 µs`. Both numbers are
-   set by the SPI bus and the chip clocks — there is nothing the CPU can
-   do to make them shorter.
+1. **`spidev` `SPI_IOC_MESSAGE` ioctl (≈ 31 µs total — dominant).** Each
+   call to `ioctl(fd, SPI_IOC_MESSAGE(1), …)` reconfigures the SPI
+   controller for the requested clock rate, programs the transfer (TX/RX
+   buffers, length, CS handling), starts it, blocks until completion, and
+   returns. The blocking wait includes the on-wire bit-clocking, so the
+   ~12.5 µs ADC transfer and ~1.5 µs DAC transfer are *inside* this cost.
+   Per-call measured wall time: **~14 µs for the ADC, ~17 µs for the DAC**
+   (the DAC's higher overhead is the controller having to re-prescale from
+   1.92 MHz to 15.6 MHz). This is the dominant *avoidable* cost.
 
-2. **`spidev` syscall overhead (≈ 10–15 µs).** Each call to
-   `ioctl(fd, SPI_IOC_MESSAGE(1), …)` crosses the user/kernel boundary,
-   parses an `spi_ioc_transfer` struct, programs the controller, and
-   returns. With two SPI transfers per iteration (one read, one write),
-   this adds up to roughly 10–15 µs.
+2. **SPI bytes on the wire (irreducible, ≈ 14 µs of the spidev time).**
+   The ADS1256's SPI clock is capped at `f_CLKIN / 4 ≈ 1.92 MHz`, so its
+   3-byte sample takes `(3 × 8) / 1.92 MHz ≈ 12.5 µs` to clock in. The
+   DAC8552 runs at 15.6 MHz, so its 3-byte write is on the wire in only
+   `≈ 1.5 µs`. Both numbers are set by the SPI bus and the chip clocks —
+   nothing the CPU can do to make them shorter. Note: these are
+   *included* in the spidev figure above (the syscall blocks until the
+   wire clocks out), not added on top of it.
 
-3. **GPIO uAPI v2 ioctls for chip select (≈ 20 µs).** Each iteration
+3. **GPIO uAPI v2 ioctls for chip select (≈ 2 µs total).** Each iteration
    toggles two chip-select lines twice each (ADC CS↓, ADC CS↑, DAC CS↓,
-   DAC CS↑). Every toggle is an `ioctl(fd, GPIO_V2_LINE_SET_VALUES_IOCTL,
-   …)` — about 5 µs per call on the RP1 — so four toggles cost roughly
-   20 µs. These are also the dominant *avoidable* cost.
+   DAC CS↑). The cost per ioctl on this RP1 is **~500 ns** (measured by
+   the Phase 2 delta — not the ~5 µs originally estimated). Four toggles
+   therefore cost ~2 µs, a small fraction of the 48 µs total. Replacing
+   them with `mmap`-based register writes (~25 ns each in isolation,
+   ~500 ns including loop-context overhead) recovers only ~2 µs.
 
 The diagram below lays this out chronologically: the top row is the total
 47.96 µs window, the middle row splits it into the two measured phases
@@ -372,19 +383,21 @@ and with the measured phase totals.
 
 ![Per-iteration timing breakdown — top row is the total processing latency, middle row is the two measured phases, bottom row decomposes each phase into GPIO ioctls, spidev syscall, and SPI bytes on the wire.](analysis/figures/latency_timing.png)
 
-| Item | µs | Note |
+| Item | µs | Source / note |
 |---|---:|---|
-| ADS1256 3-byte read on the wire @ 1.92 MHz | 12.5 | irreducible |
-| DAC8552 3-byte write on the wire @ 15.6 MHz | 1.5 | irreducible |
-| `spidev` `SPI_IOC_MESSAGE` syscall × 2 | ~10–15 | OS overhead |
-| GPIO uAPI v2 `SET_VALUES` ioctls (4× per iter, for CS) | ~20 | per call ≈ 5 µs on the RP1 |
-| Misc. (timing measurements, branches, memory) | ~1 | |
-| **Sum** | **~47** | matches the measured 47.96 µs |
+| `spidev` ADC SPI_IOC_MESSAGE (3 bytes @ 1.92 MHz incl. 12.5 µs on-wire) | ~14   | measured (ADC-read median 26.4 µs − 2× GPIO mmap 1.0 µs − misc) |
+| `spidev` DAC SPI_IOC_MESSAGE (3 bytes @ 15.6 MHz incl. 1.5 µs on-wire)   | ~17   | measured (DAC-write median 19.4 µs − 2× GPIO mmap 1.0 µs − misc) |
+| GPIO uAPI v2 `SET_VALUES` ioctls (4× per iter, for CS)                   | ~2    | measured via the Phase 2 delta in §6.2 (~500 ns each) |
+| Misc. (`clock_gettime` ×3, branches, memory)                             | ~1    | |
+| **Sum**                                                                  | **~34** + 14 on-wire = **48** | matches the measured 47.96 µs |
 
-The dominant *avoidable* software cost is the GPIO ioctl path. An `mmap`'d
-direct-register approach would cut each CS toggle to a few hundred
-nanoseconds, saving ~15–20 µs total — but only on the software component,
-and the SINC5 filter would still set the analog-to-analog latency floor.
+The on-wire SPI bit-clocking sits *inside* the `spidev` rows (the
+`SPI_IOC_MESSAGE` ioctl blocks until the transfer completes). The
+**dominant avoidable cost is the `spidev` driver itself**, not the GPIO
+ioctls as originally estimated. Phase 3 of the §6 plan targets exactly
+this — replacing `spidev` with direct RP1 SPI peripheral register access.
+Predicted post-Phase-3 software median: **~14–18 µs** (essentially just
+the on-wire bit-clocking plus minimal register-level setup).
 
 ### 5.4 A subtlety found during bring-up
 
@@ -536,6 +549,41 @@ driver, interrupt activity, etc.) that the GPIO change alone cannot fix.
 **Bonus.** The Phase 2 result is itself the *measured* counterpart to row
 B in §5.5 (same HAT, direct register access for GPIO only). That row will
 be updated from "predicted ~187 µs end-to-end" to a real number.
+
+**Result (2026-05-24): FAILS the pass gate, but informatively.** Built as
+`feasibility/latency_loop_mmap` (same `latency_loop.c`, `ads1256.c`,
+`dac8552.c` as the headline build; only `gpio.c` is replaced by
+`feasibility/gpio_mmap.c`). Ran `--mode characterize -n 50000`:
+
+| Stage | original (§4.2) | Phase-2 (mmap GPIO) | delta |
+|---|---:|---:|---:|
+| ADC read     | 27.52 µs | 26.44 µs | **−1.08 µs** |
+| DAC write    | 20.43 µs | 19.39 µs | **−1.04 µs** |
+| Processing latency | 47.96 µs | **45.83 µs** | **−2.13 µs** |
+| Loop period  | 66.74 µs | 66.37 µs | −0.37 µs |
+
+The software median dropped only 2.13 µs (not the predicted ~20 µs), so it
+sits at 45.83 µs — well above the 32 µs pass gate. **However, the savings
+themselves are diagnostic and revise §5.3 in an important way:**
+
+- Each phase removed 2 GPIO toggles, and each phase saved ~1.0 µs. So the
+  measured cost of a GPIO uAPI v2 ioctl on this RP1 is **~500 ns per call**,
+  not the ~5 µs that §5.3 originally estimated. The total GPIO contribution
+  to the loop is therefore **~2 µs**, not ~20 µs.
+- By subtraction, the `spidev` `SPI_IOC_MESSAGE` ioctl is costing
+  **~14 µs per transfer for the ADC and ~17 µs for the DAC** (vs the ~10-15 µs
+  total that §5.3 originally estimated for both calls combined). That
+  is where the loop's software time actually goes — controller setup,
+  blocking wait, and return through the kernel SPI driver, not the
+  GPIO ioctls.
+
+This revises §5.3 and tightens the Phase 3 prediction: the spidev path
+*is* the dominant avoidable cost, so a direct-SPI-register Phase 3 should
+have a much bigger effect than Phase 2 did. The §6.3 prediction of
+"~14–17 µs software median" is unchanged by this finding (it always rested
+on the on-wire SPI bit-clocking being the residual irreducible cost).
+
+§5.3 has been updated to reflect the empirical breakdown.
 
 ### 6.3 Phase 3 — Direct SPI register access
 

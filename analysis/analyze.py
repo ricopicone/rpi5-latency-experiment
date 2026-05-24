@@ -323,23 +323,27 @@ def plot_latency_timing(adc_ns: np.ndarray, dac_ns: np.ndarray,
     Gantt-style breakdown of one loop iteration: top row is the full
     DRDY -> DAC-write window (~48 us median), middle row splits it into the
     measured ADC-read and DAC-write phases, bottom row decomposes each phase
-    into GPIO ioctls + spidev syscall + SPI bit-clocking on the wire.
+    into GPIO ioctls + spidev syscall (which contains the on-wire SPI
+    bit-clocking) + GPIO ioctls.
 
-    The middle row's segment widths are the measured medians from the CSV;
-    the bottom row's sub-segments are estimates that match the medians and
-    are consistent with each component's known cost (per-CS GPIO ioctl ~5 us,
-    spidev syscall ~2-3 us, SPI on-wire = (3*8/clock)*1e6 us).
+    The middle row's segment widths are the measured medians from the CSV.
+    Per-call costs in the bottom row come from the Phase 2 experiment
+    (§6.2 of REPORT.md): each GPIO uAPI v2 ioctl on the RP1 was measured at
+    ~500 ns (not the ~5 us originally estimated). The spidev overhead
+    (controller setup + blocking wait + return) is the residual after
+    subtracting the GPIO toggles; it *includes* the on-wire bit-clocking
+    because SPI_IOC_MESSAGE blocks until the transfer completes.
     """
     adc_med = float(np.median(adc_ns)) * 1e-3
     dac_med = float(np.median(dac_ns)) * 1e-3
     proc_med = float(np.median(proc_ns)) * 1e-3
 
-    # Sub-decomposition (estimates).
+    # Sub-decomposition (Phase 2 measurements).
     spi_adc_wire = 3 * 8 / 1.92e6 * 1e6              # 12.5 us
     spi_dac_wire = 3 * 8 / 15.6e6 * 1e6              # 1.54 us
-    gpio_each = 5.0                                  # ~5 us per ioctl
-    spidev_adc = adc_med - 2 * gpio_each - spi_adc_wire
-    spidev_dac = dac_med - 2 * gpio_each - spi_dac_wire
+    gpio_each = 0.5                                  # ~500 ns per ioctl
+    spidev_adc = adc_med - 2 * gpio_each             # includes on-wire SPI
+    spidev_dac = dac_med - 2 * gpio_each             # includes on-wire SPI
 
     fig, ax = plt.subplots(figsize=(11.0, 4.5))
     row_h = 0.6
@@ -374,27 +378,35 @@ def plot_latency_timing(adc_ns: np.ndarray, dac_ns: np.ndarray,
             ax.text(left + width / 2, y_bot, text,
                     ha="center", va="center", fontsize=7.5, color="black")
 
-    adc_segs = [
-        (gpio_each,   "C4", "GPIO\nCS↓"),
-        (spidev_adc,  "C9", "spidev\nsyscall"),
-        (spi_adc_wire,"C0", f"SPI on wire\n{spi_adc_wire:.1f} µs"),
-        (gpio_each,   "C4", "GPIO\nCS↑"),
-    ]
-    x = 0.0
-    for w, c, t in adc_segs:
-        seg(x, w, c, t)
-        x += w
+    # Each ADC/DAC phase: thin GPIO CS↓ sliver, big spidev block (which
+    # internally contains the on-wire SPI bit-clocking, shown as a darker
+    # band inside), thin GPIO CS↑ sliver.
+    def phase(x0, gpio_w, spidev_w, on_wire_w, spidev_color, wire_color,
+              wire_label):
+        # GPIO CS↓
+        seg(x0, gpio_w, "C4", "")
+        x = x0 + gpio_w
+        # spidev block (controller setup + wait + return).
+        seg(x, spidev_w, spidev_color, "spidev SPI_IOC_MESSAGE\n(setup + wait + return)")
+        # Darker band inside it for the on-wire portion (drawn last so it
+        # sits on top of the spidev block).
+        on_wire_start = x + spidev_w - on_wire_w
+        ax.barh(y_bot, on_wire_w, left=on_wire_start, height=row_h * 0.45,
+                color=wire_color, edgecolor="black", linewidth=0.4)
+        ax.text(on_wire_start + on_wire_w / 2, y_bot - row_h * 0.18,
+                wire_label, ha="center", va="top", fontsize=7,
+                color="black")
+        x += spidev_w
+        # GPIO CS↑
+        seg(x, gpio_w, "C4", "")
+        return x + gpio_w
 
-    dac_segs = [
-        (gpio_each,   "C4", "GPIO\nCS↓"),
-        (spidev_dac,  "C9", "spidev\nsyscall"),
-        (spi_dac_wire,"C1", f"{spi_dac_wire:.1f} µs"),
-        (gpio_each,   "C4", "GPIO\nCS↑"),
-    ]
-    x = adc_med
-    for w, c, t in dac_segs:
-        seg(x, w, c, t)
-        x += w
+    end_x = phase(0.0,    gpio_each, spidev_adc, spi_adc_wire,
+                  "C9", "C0",
+                  f"on-wire {spi_adc_wire:.1f} µs (ADC @ 1.92 MHz)")
+    end_x = phase(end_x,  gpio_each, spidev_dac, spi_dac_wire,
+                  "C9", "C1",
+                  f"on-wire {spi_dac_wire:.1f} µs (DAC @ 15.6 MHz)")
 
     # Annotations linking rows
     ax.annotate("", xy=(0, y_mid + row_h / 2 + 0.05),
@@ -421,12 +433,12 @@ def plot_latency_timing(adc_ns: np.ndarray, dac_ns: np.ndarray,
     # Legend
     from matplotlib.patches import Patch
     handles = [
-        Patch(color="C4", label="GPIO uAPI v2 ioctl (CS toggle, ~5 µs each)"),
-        Patch(color="C9", label="spidev SPI_IOC_MESSAGE syscall overhead"),
-        Patch(color="C0", label="SPI bytes on wire @ 1.92 MHz (ADC, 12.5 µs)"),
-        Patch(color="C1", label="SPI bytes on wire @ 15.6 MHz (DAC, 1.5 µs)"),
+        Patch(color="C4", label="GPIO uAPI v2 ioctl, CS toggle (~500 ns each, measured)"),
+        Patch(color="C9", label="spidev SPI_IOC_MESSAGE (setup + blocking wait + return)"),
+        Patch(color="C0", label="on-wire SPI clocking, ADC side (12.5 µs @ 1.92 MHz)"),
+        Patch(color="C1", label="on-wire SPI clocking, DAC side (1.5 µs @ 15.6 MHz)"),
     ]
-    ax.legend(handles=handles, loc="lower center", bbox_to_anchor=(0.5, -0.25),
+    ax.legend(handles=handles, loc="lower center", bbox_to_anchor=(0.5, -0.30),
               ncol=2, frameon=False, fontsize=8)
 
     ax.set_xlim(-2.5, proc_med + 2.5)
