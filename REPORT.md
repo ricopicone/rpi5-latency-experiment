@@ -590,6 +590,64 @@ on the on-wire SPI bit-clocking being the residual irreducible cost).
 
 §5.3 has been updated to reflect the empirical breakdown.
 
+### 6.2.5 Phase 2.5 — two `spidev` FDs to avoid per-transfer clock reconfig
+
+**Motivation.** Phase 2 revealed that `spidev` is the dominant cost, and
+inspection of the original `spidev_util.h` shows we set `tr.speed_hz`
+*per transfer* — alternating between 1.92 MHz for the ADC and 15.6 MHz for
+the DAC every iteration. The RP1 SPI controller's clock prescaler may well
+need reconfiguring on every speed change. If so, switching to a "two FDs,
+fixed speed each" pattern (open the device twice, set
+`SPI_IOC_WR_MAX_SPEED_HZ` on each FD once at init, omit `tr.speed_hz` in
+the transfer struct) would avoid the reconfig and tell us how much of the
+spidev cost is the prescaler.
+
+**Implementation.** `feasibility/latency_loop_2fd.c`. Opens `/dev/spidev0.0`
+twice (once at ADS1256_SPI_HZ, once at DAC8552_SPI_HZ), uses gpio_mmap.c
+for fast CS, and inlines the hot-path ADC read and DAC write so the two
+FDs are used directly.
+
+**Result (2026-05-24): PASSES the §6.2 pass gate, by a clear margin.**
+
+| Stage | original | Phase 2 (mmap GPIO) | **Phase 2.5 (2 FDs)** | save vs orig |
+|---|---:|---:|---:|---:|
+| ADC read | 27.52 µs | 26.44 µs | **12.94 µs** | **−14.58 µs** |
+| DAC write | 20.43 µs | 19.39 µs | **19.32 µs** | −1.11 µs |
+| Processing latency | 47.96 µs | 45.83 µs | **32.26 µs** | **−15.70 µs** |
+
+The ADC's per-call wall time has dropped to **12.94 µs — essentially the
+on-wire bit-clocking floor of 12.5 µs**. The spidev overhead on the ADC
+side is now ≤ 1 µs. The DAC side stayed at 19 µs, so the DAC's cost was
+*not* the prescaler — it is genuine kernel-driver setup overhead per
+SPI_IOC_MESSAGE. That separation is itself informative.
+
+**A note on the 33 µs loop period.** With software down to 32 µs and the
+ADS1256 conversion interval at 66.7 µs, the loop sometimes observes
+`DRDY` low on two consecutive iterations (the line is still low from the
+previous conversion when the next iteration polls). About **36% of
+consecutive iterations** read identical `adc_raw` values for this reason.
+The per-iteration *timing* numbers remain honest (clock_gettime is not
+affected by sample staleness), but in a production implementation the
+DRDY logic would need to wait for the rising edge before re-polling.
+
+**Implication for Phase 3.** With the prescaler fix, the remaining
+avoidable cost is the DAC's ~17 µs of fixed spidev driver overhead.
+Phase 3's direct-register-access approach would replace this with ~1–2 µs
+of register writes. Revised Phase 3 prediction:
+
+> **Software median ~16–20 µs** after Phase 3 (was ~14–17 µs before
+> Phase 2.5 data). This is just barely above the §6.3 pass gate of
+> ≤ 20 µs.
+
+What this means for the row-D ~10 µs end-to-end claim: it is now clear
+the platform side cannot get below ~16 µs software with this HAT no
+matter what we do, because the ADS1256's 12.5 µs on-wire read alone uses
+most of the budget. A 10 µs end-to-end target therefore requires *both* a
+fast SAR ADC (whose SPI read at ≥ 20 MHz takes ~1 µs) *and* the Phase 3
+register-level work. The Pi 5 + Phase 3 + fast SAR ADC is predicted at
+**~10–15 µs end-to-end** — close to the target, but with less margin than
+the row-D prediction originally suggested.
+
 ### 6.3 Phase 3 — Direct SPI register access
 
 **What.** Replace `spidev` calls with `mmap`'d access to the RP1 SPI
