@@ -162,6 +162,12 @@ From these it computes:
 - `proc latency` = `td − tb`  (DRDY → DAC chip written; the headline software number)
 - `loop period`  = `td − td_prev` (back-to-back iteration time)
 
+(`ta` is recorded for completeness — the duration `tb − ta` is how long the
+CPU spent waiting for `DRDY` to assert, i.e. idle time inside the
+conversion interval — but no separate "DRDY wait" statistic is reported,
+because it is just `loop period − proc latency` and can be derived from the
+two stats that are.)
+
 Per-sample data was captured with `--csv` and analyzed off-line. The 50 000
 samples used in this report come from a single `--mode characterize -n 50000`
 run while the rig was idle (no function-generator input — the timing numbers
