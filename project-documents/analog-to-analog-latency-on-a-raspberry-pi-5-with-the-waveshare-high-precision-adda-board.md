@@ -13,6 +13,19 @@ title: Analog-to-Analog Latency on a Raspberry Pi 5 with the Waveshare High-Prec
 
 ## 1. Summary
 
+> **TL;DR.** End-to-end analog-to-analog latency on a Pi 5 + Waveshare
+> High-Precision AD/DA Board is **measured at 212 µs**. About **78%** of
+> that is the ADS1256 ADC's internal SINC decimation filter — a converter
+> property, unavoidable on this hardware. The remaining ~22% is the
+> user-space C loop; a §6 feasibility test brought that software piece
+> down to **19 µs** by `mmap`-ing the Pi 5's I/O registers directly and
+> bypassing the Linux `spidev` driver. With both that software change
+> *and* an ADC swap to a fast SAR converter, end-to-end latency on the
+> Pi 5 is projected at **~12–15 µs** — close to a 10 µs aspirational
+> target but with little margin. Going below ~10 µs cleanly would call
+> for a different platform (microcontroller or FPGA), not a different
+> Pi 5 configuration.
+
 This experiment evaluates the Raspberry Pi 5 as a low-latency analog-I/O
 host for the real-time computing textbook. The measurement is the end-to-end
 delay from an analog input on an ADC to the corresponding analog output on
@@ -72,7 +85,7 @@ Block diagram of the signal path:
 
 | Item | Detail |
 |---|---|
-| SBC | Raspberry Pi 5 (BCM2712, RP1 I/O controller) |
+| SBC | Raspberry Pi 5 (BCM2712 SoC + RP1 — the Pi 5's custom I/O controller chip that exposes the 40-pin header's GPIO/SPI/UART pins) |
 | OS / kernel | Debian 13 (trixie) / `6.12.47+rpt-rpi-2712`, stock — no `PREEMPT_RT`, no `isolcpus` |
 | ADC + DAC | Waveshare *High-Precision AD/DA Board* — TI ADS1256 (24-bit ΣΔ) + TI DAC8552 (16-bit) |
 | Function generator | Sine, 2 Vpp, +1.25 V DC offset (signal swing 0.25 V → 2.25 V, within the ADS1256's `AIN0 ∈ [0, AVDD]` range) |
@@ -82,7 +95,7 @@ Block diagram of the signal path:
 
 | Item | Detail |
 |---|---|
-| Loop | C, single-threaded, `SCHED_FIFO` priority 80, pinned to core 3, `mlockall(MCL_CURRENT \| MCL_FUTURE)` |
+| Loop | C, single-threaded, real-time priority (`SCHED_FIFO` at 80, the second-highest Linux RT class), pinned to CPU core 3, and `mlockall(MCL_CURRENT \| MCL_FUTURE)` — locks every memory page the process owns into RAM so a page fault can't stall the loop |
 | GPIO | Linux GPIO character-device uAPI v2 (the legacy `bcm2835` / `wiringPi` libraries are incompatible with the RP1 controller) |
 | SPI | `spidev`, per-transfer clock rate. ADS1256 clocked at 1.92 MHz (`f_CLKIN/4`, the part's hard ceiling); DAC8552 at 15.6 MHz |
 | ADC mode | RDATAC (continuous-read) on a single channel — minimum per-sample overhead |
@@ -127,9 +140,10 @@ Function generator setup (Tektronix AFG1002): sine, 500 Hz, 2.000 Vpp,
 ### 3.1 Software timing (`characterize` mode)
 
 The ADS1256 signals a freshly-converted sample by asserting its `DRDY` pin
-(Data Ready) low. The C loop polls that GPIO and only reads the sample after
-`DRDY` goes low, so every iteration is paced by the converter, not by the
-CPU. The four timestamps recorded per iteration are:
+(Data Ready) low. The C loop *polls* that GPIO — repeatedly reads it in a
+tight loop until it transitions low — and only then reads the sample, so
+every iteration is paced by the converter, not by the CPU. The four
+timestamps recorded per iteration are:
 
 ```
 ta : just before waiting for DRDY
@@ -286,6 +300,34 @@ this HAT," which was optimistic by a factor of 2–4.
 
 ## 5. Discussion
 
+> **A reader's primer on user-space SPI/GPIO on Linux** (skip if you've
+> worked with embedded Linux before).
+>
+> On Linux, a user-space program talks to an SPI chip by opening a kernel
+> "character device" called `/dev/spidev0.0` and issuing `ioctl()` calls
+> on it. Each call carries a description of one transfer (clock rate,
+> bytes to send, buffer to receive into); the kernel programs the SPI
+> controller, blocks the caller until the bits finish clocking on the
+> wire, and returns. The same idea applies to GPIO pins (chip-select,
+> the converter's "data-ready" signal, etc.) through `/dev/gpiochip0` and
+> the so-called "GPIO character-device uAPI v2." These two interfaces
+> are *portable* across Linux single-board computers and *robust* (the
+> kernel handles arbitration, scheduling, fault recovery). The trade-off
+> is that each call costs a few microseconds of crossing the user/kernel
+> boundary, validating arguments, and reprogramming the controller. At
+> kHz-rate work that overhead is negligible; at the sub-100-µs loop scale
+> of this experiment, it dominates.
+>
+> The alternative used in §6's Phase 3 is to bypass the kernel and write
+> to the SPI controller's hardware registers directly, by `mmap`-ing them
+> into the program's address space. A register write then costs ~25 ns
+> instead of ~500 ns – ~15 µs per kernel-mediated call. The price of that
+> speed is that the code is tied to *this specific chip* (the Pi 5's RP1
+> I/O controller): porting to a Pi 4 or any other board would mean
+> rewriting against a different register layout. The rest of §5 and §6
+> uses these terms freely — `spidev` / GPIO uAPI v2 for "the kernel
+> interfaces," `mmap` / "register-direct" for "the Pi-5-specific bypass."
+
 ### 5.1 The Pi 5 silicon is not the bottleneck — the chosen Linux interfaces are
 
 The honest way to read the 48 µs software number is in three layers:
@@ -411,20 +453,13 @@ the on-wire bit-clocking plus minimal register-level setup).
 
 ### 5.4 A subtlety found during bring-up
 
-The Pi 5's RP1 `spidev` driver does **not** accept the `SPI_NO_CS` bit
-through `SPI_IOC_WR_MODE32` — it returns `EINVAL`. The code falls back to
-the older 8-bit `SPI_IOC_WR_MODE` ioctl and accepts that the controller will
-then toggle its own `CE0` (GPIO8) on every transfer. The Waveshare HAT does
-not route `CE0` to any chip's select pin (both ADS1256 and DAC8552 are
-selected via GPIO22/23), so the toggle is harmless. The note printed at
-startup —
-
-```
-spi: note: kernel rejected SPI_NO_CS; controller CE0 will toggle
-     (harmless on this HAT -- chip selects are on GPIO22/23).
-```
-
-— exists to document this for the reader.
+*Implementation note (skim or skip).* The Pi 5's RP1 SPI driver rejects
+the "don't touch the chip-select line" flag (`SPI_NO_CS`), so on every
+transfer the controller toggles its own CE0 line (GPIO8). The Waveshare
+HAT does not route CE0 to anything (chip selects go via GPIO22/23), so
+the toggle is harmless. The code falls back gracefully and prints a one-
+line note at startup explaining this — see `spidev_util.h` for the
+two-line workaround.
 
 ### 5.5 What would it take to hit ~10 µs end-to-end?
 
@@ -501,6 +536,12 @@ phase by phase, into measurements.
 ---
 
 ## 6. Feasibility test plan (for the ~10 µs prediction)
+
+*A note on the numbering.* Three phases were planned (§6.1, §6.2, §6.3).
+Mid-experiment, Phase 2's result suggested a cheaper optimization worth
+measuring before committing to the more invasive Phase 3 — that became
+§6.2.5. The non-consecutive number preserves the original plan structure
+while recording when each experiment actually happened.
 
 §5.5 row D predicts that the Pi 5 can hit ~10 µs analog-to-analog if both
 (a) the ADS1256 is replaced by a fast SAR ADC and (b) the loop is rewritten
