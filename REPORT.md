@@ -122,11 +122,14 @@ and `AGND` — required for single-ended AIN0 / AINCOM operation), and after:
 
 ![HAT with analog wires landed on AD0 (input from function generator) and DAC0 (output to scope CH2), grounds on AGND.](photos/FD9EB7C6-BA2C-4827-9B18-97BDED8B79D1_1_201_a.jpg)
 
-Function generator setup (Tektronix AFG1002): sine, 500 Hz, 2.000 Vpp,
-+1.250 V DC offset. The waveform preview confirms the swing of 0.25 V →
-2.25 V, well inside the ADS1256's `AIN0 ∈ [0, AVDD]` single-ended range.
+Function generator setup (Tektronix AFG1002): sine, 2.000 Vpp,
++1.250 V DC offset, frequency swept manually from 100 Hz to 1 kHz in
+100 Hz steps for the latency measurement. The photo below shows the
+generator at one of those swept points (500 Hz) — note the waveform
+preview confirming the swing of 0.25 V → 2.25 V, well inside the
+ADS1256's `AIN0 ∈ [0, AVDD]` single-ended range.
 
-![Tektronix AFG1002 function-generator screen at the working settings: sine, 500 Hz, 2.000 Vpp, +1.250 V DC offset, start phase 0°.](photos/650D555E-C214-412E-B97E-B0E9CB106457_1_201_a.jpg)
+![Tektronix AFG1002 function-generator screen at one of the swept frequencies (500 Hz): sine, 2.000 Vpp, +1.250 V DC offset, start phase 0°. Frequency was swept across 100 Hz–1 kHz; amplitude and offset held constant.](photos/650D555E-C214-412E-B97E-B0E9CB106457_1_201_a.jpg)
 
 ---
 
