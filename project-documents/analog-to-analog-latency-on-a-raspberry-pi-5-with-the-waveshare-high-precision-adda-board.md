@@ -382,13 +382,28 @@ All three are real, and all three matter independently.
 
 The original target was 30 kSPS, the ADS1256's fastest data rate. At
 30 kSPS the conversion interval is 33.3 µs — comfortably *below* the
-measured 47.96 µs software loop. Every iteration would drop a conversion.
+measured 47.96 µs software loop. Because the loop cannot keep up, **every
+iteration drops at least one conversion**: while the loop spends 48 µs
+processing sample *N*, the ADC produces sample *N+1* at *t* = 33.3 µs and
+then **overwrites it with sample *N+2* at *t* = 66.7 µs**, before the loop
+ever returns to read DRDY. The ADS1256 in RDATAC mode replaces the contents
+of its data register every conversion interval whether the previous result
+has been read or not, so sample *N+1* is gone by the time the loop comes
+back; it reads *N+2* and moves on. The result is **non-uniform sample
+spacing**: most loop iterations skip 1 conversion and some skip 2 (since
+48 / 33.3 = 1.44 on average), so the actual inter-sample interval observed
+by the downstream signal-processing chain alternates irregularly between
+~67 µs and ~100 µs instead of being a clean 33.3 µs. That is worse than
+just running at a slower uniform rate — any frequency-domain analysis is
+contaminated by the irregular spacing, and time-domain filters that assume
+uniform Δt are biased.
 
 The fix is the one the README anticipated: drop the data rate to 15 kSPS
 (`ADS1256_DRATE = 0xE0`), doubling the conversion interval to 66.67 µs.
-That gives the loop room to keep up while paying with a longer SINC5 filter
-group delay (~167 µs vs ~83 µs at 30 kSPS). The trade-off lands in favor of
-keeping up, because the filter delay dominates either way.
+That gives the loop room to keep up — every conversion is now read exactly
+once, sample spacing is uniform — while paying with a longer SINC5 filter
+group delay (~167 µs vs ~83 µs at 30 kSPS). The trade-off lands in favor
+of keeping up, because the filter delay dominates either way.
 
 If a higher *sample rate* were genuinely needed (e.g. for bandwidth, not
 latency), the right next step would be to cut software overhead — most
