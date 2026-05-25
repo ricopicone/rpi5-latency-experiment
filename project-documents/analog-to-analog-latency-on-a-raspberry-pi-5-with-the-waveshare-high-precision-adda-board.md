@@ -309,8 +309,7 @@ this HAT," which was optimistic by a factor of 2–4.
 
 ## 5. Discussion
 
-> **A reader's primer on user-space SPI/GPIO on Linux** (skip if you've
-> worked with embedded Linux before).
+> **A reader's primer on user-space SPI/GPIO on Linux.**
 >
 > On Linux, a user-space program talks to an SPI chip by opening a kernel
 > "character device" called `/dev/spidev0.0` and issuing `ioctl()` calls
