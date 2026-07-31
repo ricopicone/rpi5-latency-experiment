@@ -6,7 +6,7 @@ title: 'TI vs ST: Next-Generation Platform Finalists'
 # TI vs ST: Next-Generation Platform Finalists
 
 **Real-Time Computing for Mechanical Engineers, 2nd Edition**
-Board comparison—internal—July 2026 (rev 3)
+Board comparison—internal—July 2026 (rev 4)
 
 ---
 
@@ -137,6 +137,28 @@ Both vendors now offer free, modern, cross-platform toolchains: ST with STM32Cub
 
 ---
 
+## Would spending more buy anything? (up-market scan)
+
+Both finalists are cheap, so it's fair to ask whether the selection was distorted by thriftiness. It wasn't—but the up-market options were checked explicitly, and the pattern is consistent in both ecosystems: **the control-peripheral ceiling is already reached at the cheap boards; extra money buys cores, MHz, Ethernet, and safety certification, none of which the labs exercise.**
+
+**TI, one tier up—LaunchPad F28P65X (~$66).** Dual 200 MHz C28x cores, ADCs with a 16-bit mode, two buffered DACs, six eQEP modules, more memory. Every one of those is headroom rather than capability the course uses: the labs need one DAC (through the external bipolar stage regardless), one or two encoders, and one core's worth of compute. It remains the documented same-toolchain upgrade path if requirements ever grow (e.g., three simultaneous encoders plus a second true DAC), and nothing in the book's material would change.
+
+**TI, bleeding edge—LaunchPad F29H85X (roughly $80–100, restricted distribution).** This is the one genuinely new thing money could buy: TI's next-generation C29-core flagship—three 200 MHz 64-bit cores, two 16-bit plus three 12-bit ADCs, six eQEP, 36 ePWM, lockstep functional safety. It was checked carefully because it signals TI's long-term direction. Verdict: wrong platform for a textbook anchor. The silicon carries **PREVIEW** status, the LaunchPad is in restricted distribution, the software stack is a new SDK rather than mature C2000Ware, there is no CLA (its role is absorbed by the extra cores), **no buffered DAC is listed**, and the enormous C28x educational corpus (C2000 Academy, DCL, decades of app notes) does not yet transfer. A first printing should not ride a preview part—and the C28x is in no danger: TI's 15–20-year production precedent plus the F28P55x's 2024 launch covers the edition's life comfortably.
+
+---
+
+**TI, Arm industrial—LP-AM263 (well north of $100).** Quad Cortex-R5F at 400 MHz with C2000-style ePWM/eQEP control peripherals and industrial Ethernet (EtherCAT/PROFINET). Money here buys compute and connectivity the labs don't need, at the cost of multicore boot/configuration complexity that would actively hurt teaching. The control peripherals are the same class as the $35 board's.
+
+**TI, form factor—controlCARD (TMDSCNCD28P55X).** Same F28P55x silicon on an HSEC-edge card intended to plug into custom boards—relevant to the course's custom-board integration as a mechanical option, but it costs more and buys nothing electrically over LaunchPad + headers.
+
+**ST, sideways—Nucleo-H563ZI (~$27).** Not meaningfully more expensive, but worth flagging: the H563 is one of the boards ST's Cube H5 example projects actually target (curing the H533RE's no-examples caveat), and it adds Ethernet and a 144-pin package. It gives up the H533's op-amp and comparator—which this design doesn't use. If the group chooses ST, the H563ZI deserves consideration over the H533RE. It does not change the TI-vs-ST decision: its encoder situation (timer mode, EXTI index, T-method velocity) is identical.
+
+**ST, up-market—H7 / H7R-S / Discovery kits / MP-series.** More money on the ST side buys clock speed (480–600 MHz Cortex-M7), displays, and eventually Linux (MP-series)—never better control peripherals. No ST part at any price adds eQEP-class encoder hardware, hardware trig, or a CLA analog; the mainline H7 is 2017–2019 silicon; the 2024 H7R/S line is graphics/memory-focused with thin analog; and the MP-series' Linux reintroduces exactly the determinism problem the book left behind with the myRIO.
+
+**Conclusion:** price was never the binding constraint. The peripherals that decide this comparison—encoder hardware, control accelerators, true DACs—are all present (or absent) identically up and down each vendor's price ladder. The $35 and $25 finalists stand.
+
+---
+
 ## Recommendation
 
 **Lean: LaunchPad F28P55X.** With the front-end and IDE effectively identical across the two boards, lifecycle even (both 2024 parts), and Arm set aside as a non-factor, the decision rests on the peripherals—and there the eQEP section is the headline: hardware index handling, hardware 1/T velocity capture, quadrature-error detection, and two pre-wired encoder connectors, versus a timer mode that must be coaxed and interrupt-assisted into the same jobs. Around that core argument sit TI's supporting advantages: 24 ePWM channels with the deepest PWM feature set in the industry, the CLA as a teachable example of real-time co-processing, the TMU accelerating exactly the trig that motor control uses, an NPU that opens an edge-ML chapter later, and the C2000 Academy curriculum written for precisely this kind of course. The H533RE counters with a faster scalar core, a second DAC channel, and a ~$12 lower price—real but modest advantages, none of which touch the book's core labs the way the encoder/PWM hardware does.
@@ -172,3 +194,7 @@ If the committee weighs unit cost heavily (a $12 difference across a whole cohor
 - [TI—High-Voltage Signal Conditioning for Low-Voltage ADCs (SBOA097)](https://www.ti.com/lit/an/sboa097b/sboa097b.pdf)
 - [TI E2E—bipolar voltage interface to ADC](https://e2e.ti.com/support/microcontrollers/c2000-microcontrollers-group/c2000/f/c2000-microcontrollers-forum/251100/bipolar-voltage-interface-to-adc)
 - [NI myRIO-1900 User Guide (±10 V MSP-C baseline)](https://download.ni.com/support/manuals/376047c.pdf)
+- [TI—F29H850TU product page (C29 preview status, peripheral set)](https://www.ti.com/product/F29H850TU)
+- [TI—LAUNCHXL-F29H85X](https://www.ti.com/tool/LAUNCHXL-F29H85X)
+- [TI—LP-AM263 LaunchPad (AM263x quad-R5F)](https://www.ti.com/tool/LP-AM263)
+- [ST—STM32H563ZI product page (2-ch DAC, no op-amp, encoder timers)](https://www.st.com/en/microcontrollers-microprocessors/stm32h563zi.html)
