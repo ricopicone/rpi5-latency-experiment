@@ -155,7 +155,7 @@ Both finalists are cheap, so it's fair to ask whether the selection was distorte
 
 **ST, up-market—H7 / H7R-S / Discovery kits / MP-series.** More money on the ST side buys clock speed (480–600 MHz Cortex-M7), displays, and eventually Linux (MP-series)—never better control peripherals. No ST part at any price adds eQEP-class encoder hardware, hardware trig, or a CLA analog; the mainline H7 is 2017–2019 silicon; the 2024 H7R/S line is graphics/memory-focused with thin analog; and the MP-series' Linux reintroduces exactly the determinism problem the book left behind with the myRIO.
 
-**Conclusion:** price was never the binding constraint. The peripherals that decide this comparison—encoder hardware, control accelerators, true DACs—are all present (or absent) identically up and down each vendor's price ladder. The $35 and $25 finalists stand.
+**Conclusion:** price was never the binding constraint. The peripherals that decide this comparison—encoder hardware, control accelerators, true DACs—are all present (or absent) identically up and down each vendor's price ladder. The inexpensive finalists stand.
 
 ---
 
