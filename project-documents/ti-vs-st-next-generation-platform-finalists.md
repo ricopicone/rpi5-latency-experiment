@@ -179,7 +179,7 @@ Both finalists are cheap, so it's fair to ask whether the selection was distorte
 - **About 127 of the 180 are usable signals.** The overhead is 18 GND, 6× 5V0 plus VDD and VDDIO, VREFHI/VREFLO, 17 reserved, 7 JTAG, and device reset.
 - **The standard reserves pin 9 for DACA and pin 11 for DACB**, both shared with ADC1 inputs—so a standards-compliant carrier gets two DAC positions, which is the mechanism by which the F28P65x's second buffered DAC would actually reach a custom board.
 - **The standard exposes exactly two complete eQEP interfaces**—pins 68/70/72/74 and 100/102/104/106, each carrying A, B, strobe, and index. This is the practical cap on encoders at the standard positions, regardless of the six eQEP modules the F28P65x contains.
-- Beyond those: 24 analog channel positions, 14 ePWM, 8 SPI/eCAP, 6 sigma-delta, and 56 general GPIO.
+- Beyond those: 24 analog channel positions, 16 ePWM, 8 SPI/eCAP, 6 sigma-delta, and 58 general GPIO.
 
 Because this map is a *standard* shared across all 180-pin controlCARDs, a carrier board designed to it accepts any card in the family—which is what makes a "book on one part, projects on another" split mechanically clean. Costs: roughly $190–260 per card versus ~$35 for the LaunchPad, and stock is thinner (tens of units across authorized distributors, with 12-week factory lead times once depleted), so a cohort's worth should be bought in one order rather than restocked mid-semester. Lifecycle and supply-chain risk are both rated Low.
 
@@ -240,4 +240,4 @@ If the committee weighs unit cost heavily (a $12 difference across a whole cohor
 - [TI—180-Pin ControlCARD Docking Station Information Guide (SPRUIJ6)](https://www.ti.com/lit/pdf/spruij6)
 - [TI—TMDSCNCD28P65X controlCARD schematic (SPRR478)](https://www.ti.com/lit/pdf/sprr478)
 - [TrustedParts—TMDSCNCD28P65X stock and risk ratings](https://www.trustedparts.com/en/part/texas-instruments/TMDSCNCD28P65X)
-- C2000Ware `boards/ExperimenterKits/DockingStation_HSEC_120or180pin/revF/180_HSEC8_DV_pinout_Rev_F.pdf`—the authoritative HSEC180 controlCARD standard map (source of the 180-pin figures above; a parsed CSV of all 180 pins accompanies this document)
+- HSEC180 controlCARD standard map—parsed from C2000Ware `boards/ExperimenterKits/DockingStation_HSEC_120or180pin/revF/180_HSEC8_DV_pinout_Rev_F.pdf`; full 180-pin table in project files as `HSEC180_controlCARD_standard_pinout.csv`
