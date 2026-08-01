@@ -27,7 +27,7 @@ One bipolar analog input (AI) and one bipolar analog output (AO), ±5 V nominal,
 
 ## Panel A—analog input: ±5 V → 0–3.3 V
 
-[](/rtc-book/images/11/raw/)
+[](/rtc-book/images/13/raw/)
 
 A three-resistor passive network does the attenuation and level shift in one step: R1 (30.1 kΩ) from the jack, R2 (20 kΩ) to 3V3A, R3 (59 kΩ) to ground meet at one node, giving V_node = 0.332·V_in + 0.499·VDDA—i.e. ±5 V maps to 0.00–3.30 V (verified: −5 V → −0.011 V, +5 V → 3.305 V; the ~10 mV overrange at the extremes is clipped by the buffer and absorbed in calibration, or back R1 off to 30.9 kΩ for guaranteed margin). U1A buffers the ~10 kΩ Thevenin impedance so the ADC's sample-and-hold sees a stiff source—this matters at the C2000's 3.9 MSPS acquisition times and equally for the H533. R4 (1 kΩ) plus the BAT54S clamp pair (D1a/D1b) then bound the ADC pin to −0.3…+3.6 V no matter what the buffer does.
 
