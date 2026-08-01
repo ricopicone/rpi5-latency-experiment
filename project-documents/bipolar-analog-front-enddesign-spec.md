@@ -27,7 +27,7 @@ One bipolar analog input (AI) and one bipolar analog output (AO), ±5 V nominal,
 
 ## Panel A—analog input: ±5 V → 0–3.3 V
 
-[](/rtc-book/images/13/raw/)
+![](/rtc-book/images/16/panel_a_med_6rxmGos.png)
 
 A three-resistor passive network does the attenuation and level shift in one step: R1 (30.1 kΩ) from the jack, R2 (20 kΩ) to 3V3A, R3 (59 kΩ) to ground meet at one node, giving V_node = 0.332·V_in + 0.499·VDDA—i.e. ±5 V maps to 0.00–3.30 V (verified: −5 V → −0.011 V, +5 V → 3.305 V; the ~10 mV overrange at the extremes is clipped by the buffer and absorbed in calibration, or back R1 off to 30.9 kΩ for guaranteed margin). U1A buffers the ~10 kΩ Thevenin impedance so the ADC's sample-and-hold sees a stiff source—this matters at the C2000's 3.9 MSPS acquisition times and equally for the H533. R4 (1 kΩ) plus the BAT54S clamp pair (D1a/D1b) then bound the ADC pin to −0.3…+3.6 V no matter what the buffer does.
 
@@ -41,7 +41,7 @@ Add a capacitor across R3 (e.g., 2.2 nF, giving f_c ≈ 7 kHz with the ~10 kΩ n
 
 ## Panel B—analog output: 0–3.3 V DAC → ±5 V
 
-![frontend-panel-b-output.png](https://projects.ricopic.one/rtc-book/images/9/raw/)
+![](/rtc-book/images/17/panel_b_med.png)
 
 A classic four-resistor difference amplifier around U1B: the DAC drives the non-inverting leg through R5 (10 kΩ) with R6 (30.1 kΩ) to **ground**; V_mid (1.65 V) drives the inverting leg through R7 (10 kΩ) with R8 (30.1 kΩ) as feedback. With both ratios matched at 3.01, V_out = 3.01·(V_dac − V_mid): DAC code zero → −4.97 V, mid-code → 0 V, full-code → +4.97 V (verified numerically). Since V_mid is derived from VDDA/2 and the DAC full-scale is VDDA, this stage is also ratiometric—V_out = 3.01·VDDA·(D/4095 − ½)—so rail drift cancels here too.
 
