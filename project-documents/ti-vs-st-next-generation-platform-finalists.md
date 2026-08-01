@@ -6,7 +6,7 @@ title: 'TI vs ST: Next-Generation Platform Finalists'
 # TI vs ST: Next-Generation Platform Finalists
 
 **Real-Time Computing for Mechanical Engineers, 2nd Edition**
-Board comparison—internal—August 2026 (rev 5)
+Board comparison—internal—August 2026 (rev 6)
 
 ---
 
@@ -16,7 +16,7 @@ The first edition's platform, the NI myRIO-1900, is discontinued, and a replacem
 
 Two finalists: the TI **LaunchPad F28P55X** (TMS320F28P550SJ) and the ST **Nucleo-H533RE** (STM32H533RE)—both 2024 silicon. ST's classic mixed-signal control board, the Nucleo-G474RE, was considered and set aside: 2019 silicon already seven years into its life, and its headline advantage—six on-chip op-amps—turns out not to matter for the bipolar front-end (see below). It is not discussed further.
 
-At the target ranges the analog front-end is **essentially identical for either board**—a handful of resistors on the input side and one external op-amp stage on the output side—so on-chip analog does not differentiate the boards. The IDE story is likewise a wash. What's left is real-time-control fit, lifecycle, and price, and on that basis **the F28P55X takes the lead**: dedicated eQEP encoder hardware, 24 ePWM channels, the CLA and TMU (glossed in the next section), a purpose-built motor-control curriculum, and 2024 silicon—at a $12 premium over the ST board.
+At the target ranges the analog front-end is **essentially identical for either board**—a handful of resistors on the input side and one external op-amp stage on the output side—so on-chip analog does not differentiate the boards. The IDE story is near-parity, with one live exception (Apple Silicon) treated in its own section. What's left is real-time-control fit, lifecycle, and price, and on that basis **the F28P55X takes the lead**: dedicated eQEP encoder hardware, 24 ePWM channels, the CLA and TMU (glossed in the next section), a purpose-built motor-control curriculum, and 2024 silicon—at a $12 premium over the ST board.
 
 ---
 
@@ -125,7 +125,7 @@ Both vendors ship free, comprehensive C support, so neither board is risky here�
 
 It's tempting to count "Arm" as an ST advantage, but for this book it mostly isn't—and the first edition is the reason why. The myRIO's ARM was a Cortex-A9 **application processor** (Armv7-A) running NI's Linux Real-Time: virtual memory, an OS scheduler, NI's C API over kernel drivers. The H533's Cortex-M33 is a **microcontroller core** (Armv8-M): no MMU, no Linux, bare-metal or RTOS. These share a brand name and almost nothing else that a student touches—so there is no meaningful continuity from edition 1 in choosing Arm again.
 
-Nor does the ISA matter much going forward: students write C against peripheral registers and vendor drivers on either chip, and the instruction set is invisible outside the debugger's disassembly window. The genuine Arm-ecosystem benefits are generic ones—skills nominally transfer across the many Cortex-M vendors, and third-party tools/RTOSes tend to support Arm first (this is exactly why ST's native VS Code debugging exists and TI's doesn't yet). Those are real but modest, and they're already reflected in the toolchain and community rows. Arm is not a tiebreaker here; the peripherals are.
+Nor does the ISA matter much going forward: students write C against peripheral registers and vendor drivers on either chip, and the instruction set is invisible outside the debugger's disassembly window. The genuine Arm-ecosystem benefits are generic ones—skills nominally transfer across the many Cortex-M vendors, and third-party tools/RTOSes tend to support Arm first (this is exactly why ST's native VS Code debugging exists and TI's doesn't yet, and it is part of why ST reached native Apple Silicon first). Those are real but modest, and they're already reflected in the toolchain and community rows. Arm is not a tiebreaker here; the peripherals are.
 
 ---
 
@@ -147,15 +147,28 @@ Nor does the ISA matter much going forward: students write C against peripheral 
 | Debug on board | XDS110 | ST-LINK/V3EC |
 | Headers | BoosterPack ×2 | Arduino Uno V3 + Morpho |
 | C libraries (see dedicated section) | C2000Ware: driverlib + examples **for this board**, DCL control library, IQmath, FreeRTOS demos | CubeH5: HAL/LL + CMSIS-DSP; no H533RE example projects; ThreadX-first middleware |
+| macOS on Apple Silicon | **x86 only; requires Rosetta 2** (see section) | **Native arm64** since Feb 2026 |
 | Community | Large; C2000 Academy, motor-control education canon | Growing (newer part); big STM32 base |
 | Price (Jul 2026, verified) | ~$35–36, in stock | ~$23–26, in stock |
 | Lifecycle | 2024 launch; TI precedent → late 2030s | 2024 launch; rolling 10-yr floor (now 01/2036) |
 
 ---
 
-## Development environment—brief, because it's a wash
+## Development environment—near-parity, with one live exception
 
-Both vendors now offer free, modern, cross-platform toolchains: ST with STM32CubeIDE plus an official, mature VS Code extension (full build/flash/debug, since STM32 is Arm), TI with the Theia-based CCS 20, which has VS Code's look and extension model, one-cable flash/debug via the on-board XDS110, and real-time variable watch/graphing that is particularly good in control labs (native VS Code debug for C28x is on TI's roadmap but not shipped). Either is a dramatic improvement over the first edition's archived myRIO C toolchain, and neither should decide this choice.
+Both vendors offer free, modern, cross-platform toolchains: ST with STM32CubeIDE plus an official, mature VS Code extension (full build/flash/debug, since STM32 is Arm), TI with the Theia-based CCS, which has VS Code's look and extension model, one-cable flash/debug via the on-board XDS110, and real-time variable watch/graphing that is particularly good in control labs (native VS Code debug for C28x is on TI's roadmap but not shipped). Either is a dramatic improvement over the first edition's archived myRIO C toolchain. On features, this is a wash.
+
+**There is, however, one axis where the two are not currently equivalent: Apple Silicon.** This matters for a textbook, because a substantial share of mechanical-engineering students arrive with Apple Silicon Macs, and Apple is retiring the compatibility layer that TI's tools currently depend on.
+
+**Apple's timeline.** macOS 26 (Tahoe) retains full Rosetta 2. macOS 27, arriving Fall 2026, runs only on M1-or-newer machines and *removes* Rosetta 2 during installation, though it can be manually reinstalled. macOS 28, Fall 2027, is the hard stop: Intel-only applications cease to function, with a narrow carve-out reserved for old unmaintained games. Recent macOS 26.4 builds have begun warning users when an installed app will break.
+
+---
+
+**Where TI stands (as of August 2026): not yet native.** The current release, CCS 21.0.0 (June 15, 2026), ships a single macOS installer—`CCS_21.0.0.00014_mac_x86.dmg`. There is no arm64 build. TI has delivered part of the work: the 20.4.0 release notes state that the Theia IDE component is now compiled for Arm, but immediately qualify that "the backend components are still x86 based, so Rosetta is still required." The editor shell went native; the compiler, debug server, and XDS110 driver stack did not, and those are the harder half. TI has committed publicly to finishing it—see the E2E citations in Sources—but the stated "before the end of the year" target from that commitment has already passed without a native release.
+
+**Where ST stands: already native.** An ST engineer confirmed in ST's community forum that "the very first official release of STM32CubeIDE (Eclipse-based) with native support for macOS on ARM was delivered recently, at the end of February," with the VS Code extension pack and underlying bundles described as on track to follow. ST shipped native Apple Silicon roughly four months before TI's most recent x86-only release.
+
+**Assessment.** This is a real, current advantage for ST, and the only place in this comparison where the toolchains genuinely diverge. It should not by itself reverse the recommendation: TI has publicly committed, has already completed the frontend half, has roughly fourteen months before the macOS 28 deadline, and has a large education business that would be badly damaged by CCS failing on student Macs. But it is a schedule risk that lands inside this edition's expected life, not a theoretical one—and unlike most items in this document, it is outside our control. It belongs on the re-check list before the book goes to press.
 
 ---
 
@@ -178,7 +191,7 @@ Both finalists are cheap, so it's fair to ask whether the selection was distorte
 - **180 contacts are real**: odd pins 1–179 on one face of the card, even pins 2–180 on the other, 90 per face. Pins 1–48 are the analog block (JTAG occupies 1–8); 49–180 are digital.
 - **About 127 of the 180 are usable signals.** The overhead is 18 GND, 6× 5V0 plus VDD and VDDIO, VREFHI/VREFLO, 17 reserved, 7 JTAG, and device reset.
 - **The standard reserves pin 9 for DACA and pin 11 for DACB**, both shared with ADC1 inputs—so a standards-compliant carrier gets two DAC positions, which is the mechanism by which the F28P65x's second buffered DAC would actually reach a custom board.
-- **The standard exposes exactly two complete eQEP interfaces**—pins 68/70/72/74 and 100/102/104/106, each carrying A, B, strobe, and index. This is the practical cap on encoders at the standard positions, regardless of the six eQEP modules the F28P65x contains.
+- **The standard exposes exactly two complete eQEP interfaces**—pins 68/70/72/74 and 100/102/104/106, each carrying A, B, strobe, and index. This is the practical cap on encoders at the standard positions, regardless of the six eQEP modules the F28P65x contains (see the encoder-count note below).
 - Beyond those: 24 analog channel positions, 16 ePWM, 8 SPI/eCAP, 6 sigma-delta, and 58 general GPIO.
 
 Because this map is a *standard* shared across all 180-pin controlCARDs, a carrier board designed to it accepts any card in the family—which is what makes a "book on one part, projects on another" split mechanically clean. Costs: roughly $190–260 per card versus ~$35 for the LaunchPad, and stock is thinner (tens of units across authorized distributors, with 12-week factory lead times once depleted), so a cohort's worth should be bought in one order rather than restocked mid-semester. Lifecycle and supply-chain risk are both rated Low.
@@ -197,9 +210,9 @@ One caveat to settle before committing copper: the P55x and P65x controlCARD fol
 
 ## Recommendation
 
-**Lean: LaunchPad F28P55X.** With the front-end and IDE effectively identical across the two boards, lifecycle even (both 2024 parts), and Arm set aside as a non-factor, the decision rests on the peripherals—and there the eQEP section is the headline: hardware index handling, hardware 1/T velocity capture, quadrature-error detection, and two pre-wired encoder connectors, versus a timer mode that must be coaxed and interrupt-assisted into the same jobs. Around that core argument sit TI's supporting advantages: 24 ePWM channels with the deepest PWM feature set in the industry, the CLA as both a jitter-free host for the control loop and a teachable example of real-time co-processing, the TMU accelerating exactly the trig that motor control uses, an NPU that opens an edge-ML chapter later, and the C2000 Academy curriculum written for precisely this kind of course. The H533RE counters with a faster scalar core, a second DAC channel, and a ~$12 lower price—real but modest advantages, none of which touch the book's core labs the way the encoder/PWM hardware does.
+**Lean: LaunchPad F28P55X.** With the front-end effectively identical across the two boards, lifecycle even (both 2024 parts), and Arm set aside as a non-factor, the decision rests on the peripherals—and there the eQEP section is the headline: hardware index handling, hardware 1/T velocity capture, quadrature-error detection, and two pre-wired encoder connectors, versus a timer mode that must be coaxed and interrupt-assisted into the same jobs. Around that core argument sit TI's supporting advantages: 24 ePWM channels with the deepest PWM feature set in the industry, the CLA as both a jitter-free host for the control loop and a teachable example of real-time co-processing, the TMU accelerating exactly the trig that motor control uses, an NPU that opens an edge-ML chapter later, and the C2000 Academy curriculum written for precisely this kind of course. The H533RE counters with a faster scalar core, a second DAC channel, a ~$12 lower price, and—currently—a native Apple Silicon toolchain: real advantages, but only the last one touches the labs, and it is expected to be temporary.
 
-If the committee weighs unit cost heavily (a $12 difference across a whole cohort is real money) or values the Arm-ecosystem transferability of STM32 skills, the H533RE is a defensible pick and nothing in the labs would be blocked. But for a book whose identity is real-time control of mechanical systems, the C2000 is the part that was designed for the job.
+If the committee weighs unit cost heavily (a $12 difference across a whole cohort is real money), values the Arm-ecosystem transferability of STM32 skills, or judges the Apple Silicon risk unacceptable, the H533RE is a defensible pick and nothing in the labs would be blocked. But for a book whose identity is real-time control of mechanical systems, the C2000 is the part that was designed for the job.
 
 ---
 
@@ -209,6 +222,7 @@ If the committee weighs unit cost heavily (a $12 difference across a whole cohor
 - **Encoder count:** how many simultaneous encoders does the heaviest lab use? On-chip, TI handles 3 in dedicated hardware (6 on the F28P65x) and the H533 handles 2 on general-purpose timers. Note a separate constraint if the controlCARD form factor is adopted: the HSEC180 standard exposes only two complete eQEP interfaces, so a third encoder would mean muxing eQEP signals onto pins the standard assigns to other functions—possible, but a board-design tradeoff rather than a free configuration change, and constrained by which GPIOs the device's pin-mux table permits for each eQEP signal.
 - **DAC channel count:** the labs are believed to use one analog output; if a second is ever firmly required, note that the H533 has two DAC channels while the F28P55X has one (a second TI channel would come from a ~$3 SPI DAC on the custom board).
 - **Form factor:** LaunchPad + headers, or controlCARD + HSEC180 socket on the custom board? The latter costs ~5× more per unit but makes the MCU a swappable module and standardizes the mechanical interface across future projects.
+- **Apple Silicon (re-check before press):** has TI shipped a native arm64 macOS build of CCS? As of August 2026 it has not, and Rosetta 2 stops working in macOS 28 (Fall 2027). ST is already native. If TI has still not shipped when the manuscript is final, the book needs either a documented workaround for Mac students or a reconsideration of the platform. This is the one open risk in this comparison that we do not control.
 
 ---
 
@@ -241,3 +255,15 @@ If the committee weighs unit cost heavily (a $12 difference across a whole cohor
 - [TI—TMDSCNCD28P65X controlCARD schematic (SPRR478)](https://www.ti.com/lit/pdf/sprr478)
 - [TrustedParts—TMDSCNCD28P65X stock and risk ratings](https://www.trustedparts.com/en/part/texas-instruments/TMDSCNCD28P65X)
 - HSEC180 controlCARD standard map—parsed from C2000Ware `boards/ExperimenterKits/DockingStation_HSEC_120or180pin/revF/180_HSEC8_DV_pinout_Rev_F.pdf`; full 180-pin table in project files as `HSEC180_controlCARD_standard_pinout.csv`
+
+**Apple Silicon / Rosetta 2 (development-environment section):**
+
+- [TI E2E—"Is CCS going to run on Apple silicon without depending on Rosetta?"](https://e2e.ti.com/support/processors-group/processors/f/processors-forum/1655979/ccstudio-is-ccs-going-to-run-on-apple-silicon-without-depending-on-rosetta)—TI's clearest public commitment: a TI employee replies "Yes. Work is already in progress for this. A version will be available before the end of the year, if not sooner."
+- [TI E2E—"Support for XDS110 on arm64?"](https://e2e.ti.com/support/tools/code-composer-studio-group/ccs/f/code-composer-studio-forum/1094114/support-for-xds110-on-arm64)—earlier and weaker: TI acknowledges "eventually, we will need to provide an M1 native application but today the only M1 native code is in the installer." No timeline given.
+- [TI E2E—"Plans for M1 Macs"](https://e2e.ti.com/support/tools/code-composer-studio-group/ccs/f/code-composer-studio-forum/983603/ccs-ccstudio-plans-for-m1-macs)—the oldest thread; TI states CCS is not officially supported on M1 and offers no native timeline. Included to show how TI's position has moved.
+- [TI—CCS 20.4.0 release notes](https://software-dl.ti.com/ccs/esd/CCSv20/CCS_20_4_0/exports/CCS_20.4.0_ReleaseNote.htm)—TI's own documentation of partial delivery: the Theia IDE component is compiled for Arm, but "the backend components are still x86 based, so Rosetta is still required."
+- [TI—CCS 21.0.0 download page](https://www.ti.com/tool/download/CCSTUDIO/21.0.0)—current release (June 15, 2026); the only macOS installer is `CCS_21.0.0.00014_mac_x86.dmg`, confirming no arm64 build has shipped.
+- [ST community—"The future of ST tools on macOS in 2027 forward (deprecation of Rosetta 2)"](https://community.st.com/stm32cubeide-for-visual-studio-code-mcus-133/the-future-of-st-tools-on-macos-in-2027-forward-deprecation-of-rosetta-2-163538)—ST engineer confirms native macOS-on-Arm STM32CubeIDE shipped at the end of February, with the VS Code extension pack on track.
+- [AppleInsider—how and when macOS stops supporting Intel apps](https://appleinsider.com/articles/26/06/12/how-and-when-macos-will-finally-stop-support-for-intel-apps)—the macOS 26/27/28 Rosetta 2 phase-out timeline.
+
+**Caveat on the TI citations:** these are TI employee statements on the E2E support forums, not a formal published roadmap. No TI document commits to a native arm64 CCS release date. Treat the commitment as real but unscheduled.
