@@ -6,9 +6,9 @@ title: 'Platform Selection: ST STM32, Nucleo-U575ZI-Q'
 # Platform Selection: ST STM32, Nucleo-U575ZI-Q
 
 **Real-Time Computing for Mechanical Engineers, 2nd Edition**
-Board comparison and decision record—internal—August 2026 (rev 13)
+Board comparison and decision record—internal—August 2026 (rev 14)
 
-> **Revision note.** Rev 11 recorded the group's decision to use an RTOS with managed threads and to teach hardware offload as an option rather than use it in the labs. Rev 12 recorded the consequences: **ST over TI** on RTOS grounds, and a board change from the Nucleo-H533RE (whose DAC output pin PA4 is not routed to any header) to the **Nucleo-U575ZI-Q**. **Rev 13** records that the U575ZI-Q has now been checked systematically against the full accumulated requirements list rather than on RTOS and pin availability alone, that the Nucleo-H563ZI was re-examined with cost removed as a factor, and that the detailed pin map and real-time design rules now live in a companion document. The TI comparison is retained below as the decision record.
+> **Revision note.** Rev 11 recorded the group's decision to use an RTOS with managed threads and to teach hardware offload as an option rather than use it in the labs. Rev 12 recorded the consequences: **ST over TI** on RTOS grounds, and a board change from the Nucleo-H533RE (whose DAC output pin PA4 is not routed to any header) to the **Nucleo-U575ZI-Q**. Rev 13 recorded a systematic check against the full requirements list and a re-examination of the H563ZI with cost removed. **Rev 14** adds verified silicon launch dates for every candidate—an omission worth correcting, since design freshness has been a stated criterion throughout and the recommended part turns out to be older than the two boards it beat. The TI comparison is retained below as the decision record.
 
 ---
 
@@ -75,6 +75,28 @@ Enumerated from ST's own repositories: the X-CUBE-FREERTOS `Projects/` tree, STM
 
 X-CUBE-FREERTOS covers exactly nine boards across STM32U5, H5, WBA, C0, U0, U3 and N6. **The H533RE is not among them, and neither is any H5 board except the H563ZI. STM32G4 is excluded as a series.**
 
+### Silicon age
+
+Design freshness has been a stated criterion since the first memo, and the recommended part is not the newest candidate. Verified announcement dates:
+
+| Series | Announced | Age at Aug 2026 | ST longevity date |
+|---|---|---|---|
+| STM32G4 (G474) | **28 May 2019** | 7 years | 01/2036 |
+| **STM32U5 (U575)** | **25 Feb 2021** | **5 years** | **01/2036** |
+| STM32H562/H563/H573 | 7 Mar 2023 | 3 years | 01/2036 |
+| STM32H523/H533 | 3 Apr 2024 | 2 years | 01/2036 |
+| TI C2000 F28P55x | 2024 | 2 years | no published date |
+
+**Why this does not flip the recommendation.** Three reasons, in increasing order of weight.
+
+First, the **guaranteed availability is identical across all of them**—01/2036—because ST's longevity date is a rolling ten-year floor recomputed each January rather than a countdown from launch. Age does not move that number.
+
+Second, the reason age mattered when we set the G474 aside was never the calendar itself; it was what the calendar implied about ST's continued investment, since the rolling floor only holds while ST keeps renewing it. On that test the two families point in opposite directions. **The G4 has seen no expansion and is excluded as a series from ST's current FreeRTOS pack.** The U5 has been expanded at least twice since launch—the family now spans U535/U545/U575/U585/U595/U599/U5A5/U5A9 and beyond—and is one of only seven series X-CUBE-FREERTOS supports. One family is coasting; the other is still being built out.
+
+Third, the practical alternative on this axis is the H563ZI at three years, and buying those two years costs the on-chip op-amps and comparators, one of the two DAC channels, and pin headroom—capabilities the labs would actually use, traded for a number that the longevity commitment already neutralizes.
+
+**Recorded so the group can weigh it directly:** if the committee decides that anchoring a 10-year edition to 2021 silicon is unacceptable on principle, the H563ZI is the fallback and the tradeoff above is what it costs.
+
 ### Why the H533RE is out
 
 Beyond the zero vendor FreeRTOS applications and the stub Zephyr port, it has a hard I/O defect: **DAC1_OUT1 (PA4) is not routed to any header.** ST's own Zephyr morpho-connector map for this board lists PA0, PA1 and PA5 but contains no PA4 entry, and UM3121's connector table agrees. The only reachable DAC output is **DAC1_OUT2 on PA5, which is the user LED LD2**—usable only by removing solder bridge SB6, or by accepting an LED and series resistor as a nonlinear load on the DAC buffer. For a course whose requirement is one bipolar analog output, on boards students may buy themselves, requiring a soldering-iron modification on every unit is disqualifying. Secondary marks: no CORDIC, no FMAC, no DAC or TIM examples in STM32CubeH5 for this board, and a 26-week manufacturer lead time.
@@ -85,9 +107,9 @@ Beyond the zero vendor FreeRTOS applications and the stub Zephyr port, it has a 
 
 **I/O headroom—the best of any candidate.** The U5 has no Ethernet MAC, so the RMII pin block that constrains the H563ZI is free, and the virtual COM port sits on PA9/PA10 rather than PA2/PA3. **All six encoder-capable timers provide a complete A/B/Z at the headers, and both DAC channels are free**, with no solder-bridge work. VBUS_SENSE is on PC2, not PA4—the opposite of the H563 board. 92 of 110 header GPIO are free, and 64 remain after a full lab allocation.
 
-**Silicon.** 160 MHz Cortex-M33 with TrustZone and MPU; CORDIC and FMAC; **a 14-bit ADC at the full 2.5 MSPS with no sample-rate penalty**; two buffered DAC channels; and **two on-chip op-amps with PGA plus two comparators**. 2 MB flash, 786 KB SRAM. Longevity to 01/2036.
+**Silicon.** 160 MHz Cortex-M33 with TrustZone and MPU; CORDIC and FMAC; **a 14-bit ADC at the full 2.5 MSPS with no sample-rate penalty**; two buffered DAC channels; and **two on-chip op-amps with PGA plus two comparators**. 2 MB flash, 786 KB SRAM.
 
-**What it costs.** 160 MHz instead of 250—immaterial, quantified below. A low-power family orientation, surfacing mainly as one tickless-idle example that is a legitimate teaching topic. Nucleo-144 rather than Nucleo-64, which affects the carrier layout.
+**What it costs.** 160 MHz instead of 250—immaterial, quantified below. A low-power family orientation, surfacing mainly as one tickless-idle example that is a legitimate teaching topic. Nucleo-144 rather than Nucleo-64, which affects the carrier layout. And 2021 silicon rather than 2023 or 2024, discussed above.
 
 ### Verified against the full requirements list
 
@@ -108,7 +130,7 @@ The labs run a high-priority control thread and a lower-priority UI thread (keyp
 
 Two findings worth carrying into the book. First, **the scheduling overhead exceeds the control arithmetic**, which makes "implement the loop as a task, measure it, then implement it in the ISR and measure again" a natural lab. Second, **everything that can go wrong here is a latency problem, not a throughput problem**—the risk is a UI thread that masks interrupts or suspends the scheduler, not one that is merely slow. The companion document works through the taxonomy and the zero-latency-interrupt rule that makes the control loop immune to UI-thread mistakes.
 
-(Note that Arm publishes no instruction cycle counts or interrupt-latency figure for the Cortex-M33, so those numbers are engineering estimates with stated reasoning rather than citations. `DWT->CYCCNT` is available, and measuring is better pedagogy than a table.)
+(Arm publishes no instruction cycle counts or interrupt-latency figure for the Cortex-M33, so those numbers are engineering estimates with stated reasoning rather than citations. `DWT->CYCCNT` is available, and measuring is better pedagogy than a table.)
 
 ### The H563ZI, re-examined with cost removed
 
@@ -118,15 +140,15 @@ Asked again with price set aside, the answer holds—and the reason is not the o
 
 **250 MHz is not a reason.** At 10 kHz the choice is between 96.5% idle and 97.8% idle, and the H563's advantage is partly eaten by its extra flash wait state (5 versus 4).
 
-**Ethernet is the one real reason, and it is a clean flip condition.** The H563ZI has a populated PHY and RJ45; **the U575 has no Ethernet MAC in silicon**, which no board-level workaround recovers. Networked telemetry, remote monitoring, and especially measuring network-induced delay and jitter in a closed loop are first-class real-time computing topics. ST ships four Ethernet applications on the H563ZI, including UDP echo client and server—nearly a distributed-control lab already written. Caveat: those are **NetX Duo, not lwIP**; lwIP is not bundled in CubeH5 and CubeMX does not support it for H5, so it needs manual integration. Ethernet also permanently consumes nine pins whether used or not.
+**Ethernet was the one real flip condition, and the group has closed it.** The H563ZI has a populated PHY and RJ45; the U575 has no Ethernet MAC in silicon, which no board-level workaround recovers. The group has confirmed no networking chapter is planned, so this is settled—but note it cannot be revisited later without changing boards.
 
-**Recommendation:** standardize on the U575ZI-Q and buy a small set of H563ZI boards if a networking module materializes. Both are Nucleo-144, share the morpho footprint, differ by about five GPIO positions out of 110, and run the same HAL on the same core—porting a lab is a pin-map edit, which also makes "port this driver to a different MCU" a realistic assignment.
+**Two years of silicon age** is the remaining argument for the H563ZI, addressed in the silicon-age section above.
 
 Other conditions that would flip the choice: a control loop above roughly 50–100 kHz, a need for genuinely simultaneous dual-channel sampling (the H563's two matched 12-bit ADCs do this; the U575's ADC1/ADC4 pair is asymmetric), or a lab needing two independent CAN buses on one board.
 
 ### Runners-up, recorded so they aren't relitigated
 
-**NUCLEO-G474RE (~$20)** is the cheapest and most available, and the **only** ST board with vendor encoder examples—including an index example. It stays out on 2019 silicon and ST's exclusion of the whole G4 series from the modern FreeRTOS pack. Its encoder examples remain useful as reference material.
+**NUCLEO-G474RE (~$20)**, May 2019 silicon, is the cheapest and most available, and the **only** ST board with vendor encoder examples—including an index example. It stays out on age and on ST's exclusion of the whole G4 series from the modern FreeRTOS pack. Its encoder examples remain useful as reference material.
 
 **NUCLEO-U385RG-Q (~$24)** is the only Nucleo-64 with all four modern FreeRTOS applications, but at 96 MHz with no CORDIC, no FMAC and four encoder timers, it is oriented at ultra-low-power rather than control.
 
@@ -172,21 +194,31 @@ What the book now teaches is better than the first edition could deliver: jitter
 
 - **Confirm the G4 encoder examples port to the U5.** Highest-value item; directly reduces the largest lab-development cost.
 - **Order two or three Nucleo-U575ZI-Q boards** and work the verification checklist in the companion document—PA4/PA5 free for DAC, PA0 unencumbered, 5 V tolerance for the encoder and keypad pins, encoder index behavior, and the CPU-budget measurement.
+- **Silicon age:** the committee should confirm it is comfortable anchoring the edition to 2021 silicon given the identical 01/2036 longevity date and ST's continued investment in the U5 family. If not, the H563ZI is the fallback at the cost described above.
 - **Range:** ±5 V or ±3.3 V for the front end? Decide from the labs' actual sensor and actuator interfaces; the U5's 14-bit ADC gives more headroom than the design assumed.
 - **RTOS API:** native FreeRTOS or CMSIS-RTOS2 (recommend native). Confirm the control-loop thread structure and whether the loop is tick-driven or interrupt-driven, since the jitter lab follows from that choice.
 - **Encoder count and type:** how many simultaneous encoders, and single-ended or differential?
-- **Networking:** is a networked-telemetry or distributed-control chapter in scope? This is the one condition that would flip the board to the H563ZI, and it cannot be recovered later without a board change.
 - **Carrier form factor:** Nucleo-144, larger than the Nucleo-64 earlier analysis assumed. ST has no card-edge module for any STM32 family, so the carrier mates to the Zio and morpho headers; consider terminating at ST's published 34-pin motor-control connector (UM1970) rather than directly at the morpho pinout, which is not guaranteed consistent across boards.
 - **Debug isolation:** the ST-LINK/V3EC is not isolated and not detachable. At 12–24 V this is SELV with no shock hazard, and ST ships 8–48 V motor shields for non-isolated Nucleos with no isolation warning. The real risk is debug-link robustness and ADC noise. Two free mitigations: specify a **floating** bench supply, and have students run on battery during motor labs.
+
+**Closed:** networking. The group has confirmed no Ethernet requirement, which removes the only condition that would have forced the H563ZI. Not revisitable later without a board change.
 
 ---
 
 ## Sources
 
 **Chosen board and family**
-- [NUCLEO-U575ZI-Q](https://www.st.com/en/evaluation-tools/nucleo-u575zi-q.html) · [UM2861 (MB1549)](https://www.st.com/resource/en/user_manual/um2861-stm32u5-nucleo144-board-mb1549-stmicroelectronics.pdf) · [DS13737 (STM32U575xx)](https://www.st.com/resource/en/datasheet/stm32u575zi.pdf) · [Octopart price/stock](https://octopart.com/part/stmicroelectronics/NUCLEO-U575ZI-Q)
+- [NUCLEO-U575ZI-Q](https://www.st.com/en/evaluation-tools/nucleo-u575zi-q.html) · [UM2861 (MB1549)](https://www.st.com/resource/en/user_manual/um2861-stm32u5-nucleo144-board-mb1549-stmicroelectronics.pdf) · [DS13737 (STM32U575xx)](https://www.st.com/resource/en/datasheet/stm32u575zi.pdf) · [DigiKey](https://www.digikey.com/en/products/detail/stmicroelectronics/NUCLEO-U575ZI-Q/15218436) · [Mouser](https://www.mouser.com/ProductDetail/STMicroelectronics/NUCLEO-U575ZI-Q) · [Octopart price/stock](https://octopart.com/part/stmicroelectronics/NUCLEO-U575ZI-Q)
 - [Zephyr `boards/st/nucleo_u575zi_q`](https://github.com/zephyrproject-rtos/zephyr/tree/main/boards/st/nucleo_u575zi_q)—ST-authored devicetree: `&dac1` on `dac1_out1_pa4`, LEDs on PC7/PB7/PG2, USART2 on PD5/PD6.
 - [STM32_open_pin_data](https://github.com/STMicroelectronics/STM32_open_pin_data) · [STM32CubeU5](https://github.com/STMicroelectronics/STM32CubeU5) · `stm32u5xx_hal_adc.h` (14-bit is ADC1/ADC2 only) · `stm32u5xx_hal_tim_ex.h` (encoder index via ETR)
+
+**Launch dates (rev 14)**
+- [ST press release, 25 Feb 2021—STM32U5 revealed](https://newsroom.st.com/media-center/press-item.html/p4329.html)
+- [ST press release, 7 Mar 2023—STM32H563/H573](https://newsroom.st.com/media-center/press-item.html/p4519.html)
+- [ST blog, 3 Apr 2024—STM32H523/H533](https://blog.st.com/stm32h5/)
+- [ST press release, 28 May 2019—STM32G4](https://www.globenewswire.com/news-release/2019/05/28/1853203/0/en/STMicroelectronics-Raises-Performance-Efficiency-and-Security-of-Next-Generation-Digital-Power-Applications-with-STM32G4-Microcontrollers.html)
+- [ST press release, 21 Feb 2023—STM32U5 series expansion](https://newsroom.st.com/media-center/press-item.html/p4518.html)
+- [ST product longevity program](https://www.st.com/content/st_com/en/about/quality-and-reliability/product-longevity.html)—the rolling ten-year commitment that makes all four dates converge on 01/2036.
 
 **RTOS**
 - [X-CUBE-FREERTOS](https://github.com/STMicroelectronics/x-cube-freertos)—nine boards, 34 applications; four for NUCLEO-U575ZI-Q; none for NUCLEO-H533RE; STM32G4 unsupported as a series. Kernel via [stm32-mw-freertos](https://github.com/STMicroelectronics/stm32-mw-freertos), V11.2.0.
@@ -196,7 +228,7 @@ What the book now teaches is better than the first edition could deliver: jitter
 
 **Boards evaluated and set aside**
 - [NUCLEO-H533RE](https://www.st.com/en/evaluation-tools/nucleo-h533re.html) · [UM3121 (MB1814)](https://www.st.com/resource/en/user_manual/um3121-stm32h5-nucleo64-board-mb1814-stmicroelectronics.pdf) · [Zephyr `nucleo_h533re/st_morpho_connector.dtsi`](https://github.com/zephyrproject-rtos/zephyr/blob/main/boards/st/nucleo_h533re/st_morpho_connector.dtsi)—**PA4 absent from the morpho map**.
-- [NUCLEO-H563ZI](https://www.st.com/en/evaluation-tools/nucleo-h563zi.html) · [UM3115 (MB1404)](https://www.st.com/resource/en/user_manual/um3115-stm32h5-nucleo144-board-mb1404-stmicroelectronics.pdf) · [DS14258](https://www.st.com/resource/en/datasheet/stm32h563ri.pdf) · [ST: lwIP on STM32H5 requires manual integration](https://community.st.com/t5/stm32-mcus/how-to-use-the-lwip-ethernet-middleware-on-the-stm32h5-series/ta-p/691100)
+- [NUCLEO-H563ZI](https://www.st.com/en/evaluation-tools/nucleo-h563zi.html) · [UM3115 (MB1404)](https://www.st.com/resource/en/user_manual/um3115-stm32h5-nucleo144-board-mb1404-stmicroelectronics.pdf) · [DS14258](https://www.st.com/resource/en/datasheet/stm32h563ri.pdf)
 - [NUCLEO-G474RE](https://www.st.com/en/evaluation-tools/nucleo-g474re.html) · [STM32CubeG4](https://github.com/STMicroelectronics/STM32CubeG4)—`TIM_Encoder` and `TIM_EncoderIndex_PulseOnCompare`, the only ST encoder examples in any family.
 
 **TI comparison (decision record)**
@@ -204,4 +236,4 @@ What the book now teaches is better than the first edition could deliver: jitter
 - [SPRU514 data types](https://downloads.ti.com/docs/esd/SPRU514Q/data-types-stdz0555922.html) · [SPRAD88](https://www.ti.com/lit/pdf/sprad88) · [CLA Software Development Guide](https://software-dl.ti.com/C2000/docs/cla_software_dev_guide/intro.html)
 - [TI E2E—arm64 CCS commitment, July 2026](https://e2e.ti.com/support/processors-group/processors/f/processors-forum/1655979/ccstudio-is-ccs-going-to-run-on-apple-silicon-without-depending-on-rosetta)
 
-**Method note.** Corrections across revisions 8–13 were verified against vendor datasheets, SVD-derived register definitions, CMSIS device headers, HAL and kernel sources, SDK and RTOS repository file trees, ST's pin database and board devicetrees, board user manuals, and distributor pricing—not against community posts. Five errors were caught and corrected in the process: the encoder-hardware claim (rev 8, from a forum thread about a different silicon generation), the controlCARD pinout guarantee and LaunchPad isolation overstatements and the on-chip op-amp claim (rev 9), the controlCARD price (rev 10, one card's price applied to another), the ST board selection (rev 12, an unrouted DAC pin on the previous finalist), and the scope of the evaluation itself (rev 13, a board selected on a subset of criteria before being checked against all of them). Claims that could not be verified from a primary source appear in the open questions rather than in the body.
+**Method note.** Corrections across revisions 8–14 were verified against vendor datasheets, SVD-derived register definitions, CMSIS device headers, HAL and kernel sources, SDK and RTOS repository file trees, ST's pin database and board devicetrees, board user manuals, press releases, and distributor pricing—not against community posts. Six errors or omissions were caught and corrected: the encoder-hardware claim (rev 8, from a forum thread about a different silicon generation), the controlCARD pinout guarantee and LaunchPad isolation overstatements and the on-chip op-amp claim (rev 9), the controlCARD price (rev 10, one card's price applied to another), the ST board selection (rev 12, an unrouted DAC pin on the previous finalist), the scope of the evaluation itself (rev 13, a board selected on a subset of criteria before being checked against all of them), and the absence of a launch date for the recommended part (rev 14). Claims that could not be verified from a primary source appear in the open questions rather than in the body.
